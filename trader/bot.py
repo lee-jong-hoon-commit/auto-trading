@@ -5,7 +5,7 @@ from datetime import datetime
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.schedulers.base import SchedulerAlreadyRunningError, SchedulerNotRunningError
 from config import config
-from trader import kis_client, upbit_client, analyzer, ai_engine, executor
+from trader import kis_client, upbit_client, analyzer, ai_engine, executor, watchlist
 
 logger = logging.getLogger(__name__)
 
@@ -59,8 +59,8 @@ async def run_cycle():
             try:
                 top_stocks = kis_client.get_top_stocks("KOSPI", 30) + kis_client.get_top_stocks("KOSDAQ", 20)
             except Exception as e:
-                logger.warning(f"시가총액 조회 실패, 기본 종목 사용: {e}")
-                top_stocks = kis_client.get_analysis_stocks()
+                logger.warning(f"시가총액 조회 실패, 관심종목 사용: {e}")
+                top_stocks = watchlist.get_stocks()
             screened = ai_engine.quick_screen(
                 [s for s in top_stocks if s["code"] not in held_codes], "stock"
             )
@@ -69,7 +69,8 @@ async def run_cycle():
 
         if config.is_upbit_ready:
             held_tickers = {h["ticker"] for h in crypto_portfolio.get("holdings", [])}
-            all_tickers = upbit_client.get_top_tickers(30)
+            # 사용자 관심 코인을 우선 포함하고 거래량 상위 코인으로 보강(중복 제거)
+            all_tickers = list(dict.fromkeys(watchlist.get_tickers() + upbit_client.get_top_tickers(30)))
             ticker_dicts = [{"ticker": t, "name": t} for t in all_tickers if t not in held_tickers]
             screened = ai_engine.quick_screen(ticker_dicts, "crypto")
             crypto_candidates = [{"ticker": h["ticker"]} for h in crypto_portfolio.get("holdings", [])] + screened

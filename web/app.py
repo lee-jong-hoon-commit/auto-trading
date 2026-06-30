@@ -104,7 +104,7 @@ async def run_once():
 @app.post("/api/analyze")
 async def analyze_only():
     """매매 실행 없이 AI 분석만 수행"""
-    from trader import kis_client, upbit_client, analyzer, ai_engine
+    from trader import kis_client, upbit_client, analyzer, ai_engine, watchlist
 
     state = bot.get_state()
     state["errors"] = []
@@ -113,9 +113,9 @@ async def analyze_only():
         stock_summaries = []
         crypto_summaries = []
 
-        # 주요 주식 분석 (OHLCV 조회는 kis_client.get_ohlcv로 통일)
+        # 주요 주식 분석 (OHLCV 조회는 kis_client.get_ohlcv로 통일, 대상은 관심종목)
         if config.is_kis_ready:
-            for s in kis_client.get_analysis_stocks():
+            for s in watchlist.get_stocks():
                 try:
                     df = kis_client.get_ohlcv(s["code"])
                     if df.empty:
@@ -125,9 +125,9 @@ async def analyze_only():
                 except Exception:
                     pass
 
-        # 주요 코인 분석
+        # 주요 코인 분석 (관심 코인)
         if config.is_upbit_ready:
-            for ticker in upbit_client.get_analysis_tickers():
+            for ticker in watchlist.get_tickers():
                 try:
                     df = upbit_client.get_ohlcv(ticker, count=60)
                     ind = analyzer.compute_indicators(df)
@@ -184,3 +184,40 @@ async def portfolio():
         except Exception as e:
             result["crypto"] = {"error": str(e)}
     return result
+
+
+# ---- 관심종목(워치리스트) 관리 ----
+@app.get("/api/watchlist")
+async def watchlist_get():
+    from trader import watchlist
+    return watchlist.load()
+
+
+@app.post("/api/watchlist/stock")
+async def watchlist_add_stock(payload: dict):
+    from trader import watchlist
+    try:
+        return {"ok": True, "stocks": watchlist.add_stock(payload.get("code", ""), payload.get("name", ""))}
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"ok": False, "error": str(e)})
+
+
+@app.delete("/api/watchlist/stock/{code}")
+async def watchlist_remove_stock(code: str):
+    from trader import watchlist
+    return {"ok": True, "stocks": watchlist.remove_stock(code)}
+
+
+@app.post("/api/watchlist/ticker")
+async def watchlist_add_ticker(payload: dict):
+    from trader import watchlist
+    try:
+        return {"ok": True, "tickers": watchlist.add_ticker(payload.get("ticker", ""))}
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"ok": False, "error": str(e)})
+
+
+@app.delete("/api/watchlist/ticker/{ticker}")
+async def watchlist_remove_ticker(ticker: str):
+    from trader import watchlist
+    return {"ok": True, "tickers": watchlist.remove_ticker(ticker)}

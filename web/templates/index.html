@@ -141,6 +141,34 @@
     </div>
   </div>
 
+  <!-- 관심종목(워치리스트) 관리 -->
+  <div class="card" style="margin-bottom:20px">
+    <h3>관심종목 관리 <span style="text-transform:none;letter-spacing:0;color:#6e7681;font-weight:400">— 추가/삭제 시 다음 분석부터 반영</span></h3>
+    <div class="grid-2" style="margin-bottom:0">
+      <div>
+        <div style="font-size:12px;color:#8b949e;margin-bottom:8px">📈 주식 (종목코드 6자리)</div>
+        <div style="display:flex;gap:8px;margin-bottom:10px">
+          <input id="wl-stock-code" placeholder="005930" maxlength="6"
+                 style="width:110px;padding:7px 10px;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#e6edf3;font-size:13px">
+          <input id="wl-stock-name" placeholder="이름(선택)"
+                 style="flex:1;padding:7px 10px;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#e6edf3;font-size:13px">
+          <button class="btn btn-blue" onclick="addStock()">추가</button>
+        </div>
+        <div id="wl-stocks"></div>
+      </div>
+      <div>
+        <div style="font-size:12px;color:#8b949e;margin-bottom:8px">🪙 코인 (KRW 마켓)</div>
+        <div style="display:flex;gap:8px;margin-bottom:10px">
+          <input id="wl-ticker" placeholder="KRW-BTC 또는 BTC"
+                 style="flex:1;padding:7px 10px;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#e6edf3;font-size:13px">
+          <button class="btn btn-blue" onclick="addTicker()">추가</button>
+        </div>
+        <div id="wl-tickers"></div>
+      </div>
+    </div>
+    <div id="wl-msg" style="font-size:12px;color:#f85149;margin-top:8px;min-height:16px"></div>
+  </div>
+
   <div class="grid-2">
     <!-- 보유 포트폴리오 -->
     <div class="card">
@@ -560,9 +588,87 @@ async function refreshAll() {
   try { await loadTrades(); } catch(e) {}
 }
 
+// ---- 관심종목(워치리스트) ----
+function wlMsg(text, ok=false) {
+  const el = document.getElementById('wl-msg');
+  el.textContent = text;
+  el.style.color = ok ? '#3fb950' : '#f85149';
+  if (text) setTimeout(() => { if (el.textContent === text) el.textContent = ''; }, 3000);
+}
+
+function wlChip(label, sub, onRemove) {
+  return `<span style="display:inline-flex;align-items:center;gap:6px;padding:4px 8px 4px 10px;margin:0 6px 6px 0;
+      background:#21262d;border:1px solid #30363d;border-radius:14px;font-size:12px">
+      <span>${label}${sub ? ` <span style="color:#8b949e">${sub}</span>` : ''}</span>
+      <span onclick="${onRemove}" title="삭제"
+        style="cursor:pointer;color:#8b949e;font-weight:700;line-height:1">×</span>
+    </span>`;
+}
+
+function renderWatchlist(data) {
+  const stocks = data.stocks || [];
+  const tickers = data.tickers || [];
+  document.getElementById('wl-stocks').innerHTML = stocks.length
+    ? stocks.map(s => wlChip(s.name || s.code, s.code !== (s.name||'') ? s.code : '',
+        `removeStock('${s.code}')`)).join('')
+    : '<span class="gray" style="font-size:12px">등록된 종목 없음</span>';
+  document.getElementById('wl-tickers').innerHTML = tickers.length
+    ? tickers.map(t => wlChip(t, '', `removeTicker('${t}')`)).join('')
+    : '<span class="gray" style="font-size:12px">등록된 코인 없음</span>';
+}
+
+async function loadWatchlist() {
+  try { renderWatchlist(await api('/api/watchlist')); } catch(e) {}
+}
+
+async function postJson(path, body) {
+  const res = await fetch(path, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body) });
+  return res.json();
+}
+
+async function addStock() {
+  const code = document.getElementById('wl-stock-code').value.trim();
+  const name = document.getElementById('wl-stock-name').value.trim();
+  if (!code) return;
+  const r = await postJson('/api/watchlist/stock', { code, name });
+  if (r.ok) {
+    renderWatchlist({ stocks: r.stocks, tickers: (await api('/api/watchlist')).tickers });
+    document.getElementById('wl-stock-code').value = '';
+    document.getElementById('wl-stock-name').value = '';
+    wlMsg('추가됨: ' + code, true);
+  } else wlMsg(r.error);
+}
+
+async function addTicker() {
+  const ticker = document.getElementById('wl-ticker').value.trim();
+  if (!ticker) return;
+  const r = await postJson('/api/watchlist/ticker', { ticker });
+  if (r.ok) {
+    renderWatchlist({ stocks: (await api('/api/watchlist')).stocks, tickers: r.tickers });
+    document.getElementById('wl-ticker').value = '';
+    wlMsg('추가됨: ' + ticker, true);
+  } else wlMsg(r.error);
+}
+
+async function delJson(path) {
+  const res = await fetch(path, { method: 'DELETE' });
+  return res.json();
+}
+async function removeStock(code) {
+  await delJson('/api/watchlist/stock/' + encodeURIComponent(code));
+  await loadWatchlist();
+  wlMsg('삭제됨: ' + code, true);
+}
+async function removeTicker(ticker) {
+  await delJson('/api/watchlist/ticker/' + encodeURIComponent(ticker));
+  await loadWatchlist();
+  wlMsg('삭제됨: ' + ticker, true);
+}
+
 // 초기 로드 후 SSE 연결
 (async () => {
   await refreshStatus();
+  await loadWatchlist();
   connectStream();
 })();
 </script>

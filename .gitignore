@@ -5,6 +5,7 @@
 
 # 토큰/데이터 캐시
 data/kis_token.json
+data/watchlist.json
 logs/trades.json
 logs/*.log
 *.log
