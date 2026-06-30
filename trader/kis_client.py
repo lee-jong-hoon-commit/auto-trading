@@ -258,3 +258,58 @@ def get_top_stocks(market: str = "KOSPI", limit: int = 20) -> list[dict]:
         {"code": r["mksc_shrn_iscd"], "name": r["hts_kor_isnm"], "price": float(r["stck_prpr"])}
         for r in resp.json().get("output", [])[:limit]
     ]
+
+
+def get_volume_rank(market: str = "ALL", budget: float = 0, limit: int = 30) -> list[dict]:
+    """거래대금 상위 종목 조회 — 그날그날 시장 활동성에 따라 매일 바뀌는 유니버스.
+
+    budget>0이면 가격 상한(FID_INPUT_PRICE_2)으로 1주 매수 가능한 종목만 받아온다.
+    """
+    iscd = {"KOSPI": "0001", "KOSDAQ": "1001"}.get(market, "0000")
+    resp = requests.get(
+        f"{config.KIS_BASE_URL}/uapi/domestic-stock/v1/quotations/volume-rank",
+        headers=_headers("FHPST01710000"),
+        params={
+            "FID_COND_MRKT_DIV_CODE": "J",
+            "FID_COND_SCR_DIV_CODE": "20171",
+            "FID_INPUT_ISCD": iscd,
+            "FID_DIV_CLS_CODE": "0",          # 0:전체 1:보통주 2:우선주
+            "FID_BLNG_CLS_CODE": "3",         # 3:거래금액순
+            "FID_TRGT_CLS_CODE": "111111111",
+            "FID_TRGT_EXLS_CLS_CODE": "0000000000",
+            "FID_INPUT_PRICE_1": "",
+            "FID_INPUT_PRICE_2": str(int(budget)) if budget and budget > 0 else "",
+            "FID_VOL_CNT": "",
+            "FID_INPUT_DATE_1": "",
+        },
+    )
+    resp.raise_for_status()
+    out = []
+    for r in resp.json().get("output", [])[:limit]:
+        try:
+            out.append({
+                "code": r["mksc_shrn_iscd"],
+                "name": r["hts_kor_isnm"],
+                "price": float(r["stck_prpr"]),
+            })
+        except (KeyError, ValueError, TypeError):
+            continue
+    return out
+
+
+def get_dynamic_stocks(budget: float = 0, limit: int = 30) -> list[dict]:
+    """그날의 시장 활동성 기반 동적 종목 유니버스.
+
+    거래대금 상위 → (실패 시) 시가총액 상위 순으로 시도하며, 둘 다 실패하면 빈 리스트.
+    호출 측에서 빈 리스트일 때 관심종목(워치리스트)으로 폴백한다.
+    """
+    try:
+        stocks = get_volume_rank("ALL", budget, limit)
+        if stocks:
+            return stocks
+    except Exception:
+        pass
+    try:
+        return get_top_stocks("KOSPI", limit)
+    except Exception:
+        return []

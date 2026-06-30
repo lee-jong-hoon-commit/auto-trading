@@ -339,7 +339,8 @@ async function runAnalyze() {
     const result = await api('/api/analyze', 'POST');
     renderDecisions(result.decisions, result.market_summary, new Date().toISOString(), null);
     if (result.stock_budget != null) {
-      appendLog(`종목당 예산 ${Number(result.stock_budget).toLocaleString('ko-KR')}원 · 매수가능 ${result.affordable_stocks}개 종목 분석`, 'info');
+      const src = result.universe_source ? `[${result.universe_source}] ` : '';
+      appendLog(`${src}종목당 예산 ${Number(result.stock_budget).toLocaleString('ko-KR')}원 · 매수가능 ${result.affordable_stocks}개 종목 분석`, 'info');
     }
     appendLog('AI 분석 완료', 'info');
   } catch(e) {

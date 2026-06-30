@@ -59,14 +59,16 @@ async def run_cycle():
 
         if config.is_kis_ready:
             held_codes = {h["code"] for h in stock_portfolio.get("holdings", [])}
-            try:
-                top_stocks = kis_client.get_top_stocks("KOSPI", 30) + kis_client.get_top_stocks("KOSDAQ", 20)
-            except Exception as e:
-                logger.warning(f"시가총액 조회 실패, 관심종목 사용: {e}")
-                top_stocks = watchlist.get_stocks()
-            universe = [s for s in top_stocks if s["code"] not in held_codes]
+            # 1차: 그날그날 거래대금 상위(예산 내) 동적 유니버스. 실패 시 관심종목으로 폴백.
+            dynamic = kis_client.get_dynamic_stocks(budget=stock_budget, limit=40)
+            if dynamic:
+                source = "거래대금 상위"
+                universe = [s for s in dynamic if s["code"] not in held_codes]
+            else:
+                source = "관심종목(폴백)"
+                universe = [s for s in watchlist.get_stocks() if s["code"] not in held_codes]
             affordable = kis_client.select_affordable_stocks(universe, stock_budget)
-            logger.info(f"분석 대상 종목: {len(affordable)}개 (예산 {stock_budget:,.0f}원/종목, 전체 {len(universe)}개 중)")
+            logger.info(f"분석 대상 종목[{source}]: {len(affordable)}개 (예산 {stock_budget:,.0f}원/종목, 후보 {len(universe)}개)")
             screened = ai_engine.quick_screen(affordable, "stock")
             stock_candidates = list(stock_portfolio.get("holdings", [])) + screened
             stock_candidates = stock_candidates[:config.MAX_STOCK_POSITIONS + 3]

@@ -125,10 +125,19 @@ async def analyze_only():
 
         stock_budget = stock_balance.get("cash", 0) * config.MAX_POSITION_RATIO
 
-        # 주요 주식 분석: 관심종목 중 예산으로 매수 가능한 종목만 선별
+        # 주요 주식 분석: 그날그날 거래대금 상위(동적) + 관심종목을 합쳐 예산 내 종목만 선별
         affordable_count = 0
+        universe_source = ""
         if config.is_kis_ready:
-            affordable = kis_client.select_affordable_stocks(watchlist.get_stocks(), stock_budget)
+            dynamic = kis_client.get_dynamic_stocks(budget=stock_budget, limit=25)
+            if dynamic:
+                universe_source = "거래대금 상위"
+                dyn_codes = {d["code"] for d in dynamic}
+                merged = dynamic + [s for s in watchlist.get_stocks() if s["code"] not in dyn_codes]
+            else:
+                universe_source = "관심종목"
+                merged = watchlist.get_stocks()
+            affordable = kis_client.select_affordable_stocks(merged, stock_budget, limit=15)
             affordable_count = len(affordable)
             for s in affordable:
                 try:
@@ -165,7 +174,8 @@ async def analyze_only():
         state["last_run"] = __import__("datetime").datetime.now().isoformat()
 
         return {"ok": True, "decisions": state["last_decisions"], "market_summary": state["market_summary"],
-                "stock_budget": round(stock_budget), "affordable_stocks": affordable_count}
+                "stock_budget": round(stock_budget), "affordable_stocks": affordable_count,
+                "universe_source": universe_source}
 
     except Exception as e:
         state["errors"].append(str(e))
