@@ -3,7 +3,7 @@ import asyncio
 import logging
 from datetime import datetime
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.schedulers.base import SchedulerAlreadyRunningError, SchedulerNotRunningError
+from apscheduler.schedulers.base import SchedulerAlreadyRunningError
 from config import config
 from trader import kis_client, upbit_client, analyzer, ai_engine, executor, watchlist
 
@@ -17,6 +17,7 @@ _state = {
     "market_summary": "",
     "last_trades": [],
     "errors": [],
+    "activity_log": [],
 }
 
 
@@ -24,125 +25,177 @@ def get_state() -> dict:
     return _state
 
 
+def _log(msg: str, level: str = "info"):
+    """Python 로거 + 대시보드 activity_log에 동시 기록."""
+    if level == "error":
+        logger.error(msg)
+    elif level == "warning":
+        logger.warning(msg)
+    else:
+        logger.info(msg)
+    _state["activity_log"].append({"time": datetime.now().isoformat(), "msg": msg, "level": level})
+    if len(_state["activity_log"]) > 200:
+        _state["activity_log"] = _state["activity_log"][-200:]
+
+
 async def run_cycle():
-    """1회 분석 + 매매 사이클"""
+    """1회 분석 + 매매 사이클 — 모든 블로킹 I/O는 스레드에서 실행."""
     _state["errors"] = []
-    logger.info("=== 자동매매 사이클 시작 ===")
+    _log("=== 자동매매 사이클 시작 ===")
 
     try:
-        # 1. 포트폴리오 조회
-        try:
-            stock_portfolio = kis_client.get_balance() if config.is_kis_ready else {"cash": 0, "holdings": []}
-        except Exception as e:
-            logger.warning(f"주식 잔고 조회 실패 (분석 계속): {e}")
-            stock_portfolio = {"cash": 0, "holdings": []}
-        try:
-            crypto_portfolio = upbit_client.get_balance() if config.is_upbit_ready else {"cash": 0, "holdings": []}
-        except Exception as e:
-            logger.warning(f"코인 잔고 조회 실패 (분석 계속): {e}")
-            crypto_portfolio = {"cash": 0, "holdings": []}
+        # 1. 포트폴리오 조회 (병렬)
+        _log("잔고 조회 중...")
+        async def _get_stock_portfolio():
+            try:
+                return await asyncio.to_thread(kis_client.get_balance) if config.is_kis_ready else {"cash": 0, "holdings": []}
+            except Exception as e:
+                _log(f"주식 잔고 조회 실패 (분석 계속): {e}", "warning")
+                return {"cash": 0, "holdings": []}
 
-        # 2. 손절/익절 우선 체크
-        emergency_actions = executor.check_stop_loss_take_profit(stock_portfolio, crypto_portfolio)
-        for ea in emergency_actions:
-            if ea["type"] == "stock":
-                executor.execute_stock(ea["code"], ea["name"], "SELL", 1.0, ea["reason"], stock_portfolio)
-            else:
-                executor.execute_crypto(ea["ticker"], "SELL", 1.0, ea["reason"], crypto_portfolio)
+        async def _get_crypto_portfolio():
+            try:
+                return await asyncio.to_thread(upbit_client.get_balance) if config.is_upbit_ready else {"cash": 0, "holdings": []}
+            except Exception as e:
+                _log(f"코인 잔고 조회 실패 (분석 계속): {e}", "warning")
+                return {"cash": 0, "holdings": []}
 
-        # 3. 분석 대상 종목 선정 (보유 + 유망 후보)
+        stock_portfolio, crypto_portfolio = await asyncio.gather(
+            _get_stock_portfolio(), _get_crypto_portfolio()
+        )
+
+        stock_cash = stock_portfolio.get("cash", 0)
+        crypto_cash = crypto_portfolio.get("cash", 0)
+        stock_holdings = stock_portfolio.get("holdings", [])
+        crypto_holdings = crypto_portfolio.get("holdings", [])
+        _log(f"잔고 — 주식: {stock_cash:,.0f}원 (보유 {len(stock_holdings)}종목), 코인: {crypto_cash:,.0f}원 (보유 {len(crypto_holdings)}종류)")
+
+        # 2. 분석 대상 종목 선정
         stock_candidates = []
         crypto_candidates = []
 
-        # 종목당 매수 예산 = 예수금 × 최대 비중. 이 예산으로 살 수 있는 종목만 후보로.
-        stock_budget = stock_portfolio.get("cash", 0) * config.MAX_POSITION_RATIO
-
         if config.is_kis_ready:
-            held_codes = {h["code"] for h in stock_portfolio.get("holdings", [])}
-            # 1차: 그날그날 거래대금 상위(예산 내) 동적 유니버스. 실패 시 관심종목으로 폴백.
-            dynamic = kis_client.get_dynamic_stocks(budget=stock_budget, limit=40)
+            held_codes = {h["code"] for h in stock_holdings}
+            _log("거래대금 상위 종목 조회 중...")
+            dynamic = await asyncio.to_thread(kis_client.get_dynamic_stocks, None, 40)
             if dynamic:
                 source = "거래대금 상위"
                 universe = [s for s in dynamic if s["code"] not in held_codes]
             else:
                 source = "관심종목(폴백)"
                 universe = [s for s in watchlist.get_stocks() if s["code"] not in held_codes]
-            affordable = kis_client.select_affordable_stocks(universe, stock_budget)
-            logger.info(f"분석 대상 종목[{source}]: {len(affordable)}개 (예산 {stock_budget:,.0f}원/종목, 후보 {len(universe)}개)")
-            screened = ai_engine.quick_screen(affordable, "stock")
-            stock_candidates = list(stock_portfolio.get("holdings", [])) + screened
-            stock_candidates = stock_candidates[:config.MAX_STOCK_POSITIONS + 3]
+            top_universe = universe[:40]
+            _log(f"[{source}] {len(top_universe)}개 종목 AI 1차 스크리닝 중...")
+            screened = await asyncio.to_thread(ai_engine.quick_screen, top_universe, "stock")
+            stock_candidates = list(stock_holdings) + screened
+            stock_candidates = stock_candidates[:config.STOCK_ANALYSIS_LIMIT]
+            _log(f"주식 분석 대상 확정: {len(stock_candidates)}개")
 
         if config.is_upbit_ready:
-            held_tickers = {h["ticker"] for h in crypto_portfolio.get("holdings", [])}
-            # 사용자 관심 코인을 우선 포함하고 거래량 상위 코인으로 보강(중복 제거)
-            all_tickers = list(dict.fromkeys(watchlist.get_tickers() + upbit_client.get_top_tickers(30)))
+            held_tickers = {h["ticker"] for h in crypto_holdings}
+            top_tickers = await asyncio.to_thread(upbit_client.get_top_tickers, 30)
+            all_tickers = list(dict.fromkeys(watchlist.get_tickers() + top_tickers))
             ticker_dicts = [{"ticker": t, "name": t} for t in all_tickers if t not in held_tickers]
-            screened = ai_engine.quick_screen(ticker_dicts, "crypto")
-            crypto_candidates = [{"ticker": h["ticker"]} for h in crypto_portfolio.get("holdings", [])] + screened
-            crypto_candidates = crypto_candidates[:config.MAX_CRYPTO_POSITIONS + 2]
+            _log(f"코인 {len(ticker_dicts)}개 AI 1차 스크리닝 중...")
+            screened = await asyncio.to_thread(ai_engine.quick_screen, ticker_dicts, "crypto")
+            crypto_candidates = [{"ticker": h["ticker"]} for h in crypto_holdings] + screened
+            crypto_candidates = crypto_candidates[:config.CRYPTO_ANALYSIS_LIMIT]
+            _log(f"코인 분석 대상 확정: {len(crypto_candidates)}개")
 
-        # 4. 기술적 지표 계산
-        stock_summaries = []
-        for s in stock_candidates:
+        # 3. 기술적 지표 계산 (병렬)
+        _log("기술적 지표 계산 중...")
+
+        async def _stock_summary(s):
             code = s.get("code", s.get("ticker", ""))
             name = s.get("name", code)
             try:
-                df = kis_client.get_ohlcv(code)
+                df = await asyncio.to_thread(kis_client.get_ohlcv, code)
                 indicators = analyzer.compute_indicators(df)
-                summary = analyzer.summarize_for_ai(name, indicators, "stock")
-                stock_summaries.append(summary)
+                return analyzer.summarize_for_ai(name, indicators, "stock")
             except Exception as e:
-                logger.warning(f"주식 분석 실패 {code}: {e}")
+                _log(f"주식 지표 계산 실패 {code}: {e}", "warning")
+                return None
 
-        crypto_summaries = []
-        for c in crypto_candidates:
+        async def _crypto_summary(c):
             ticker = c.get("ticker", "")
             try:
-                df = upbit_client.get_ohlcv(ticker)
+                df = await asyncio.to_thread(upbit_client.get_ohlcv, ticker)
                 indicators = analyzer.compute_indicators(df)
-                summary = analyzer.summarize_for_ai(ticker, indicators, "crypto")
-                crypto_summaries.append(summary)
+                return analyzer.summarize_for_ai(ticker, indicators, "crypto")
             except Exception as e:
-                logger.warning(f"코인 분석 실패 {ticker}: {e}")
+                _log(f"코인 지표 계산 실패 {ticker}: {e}", "warning")
+                return None
 
-        # 5. AI 의사결정
+        stock_results, crypto_results = await asyncio.gather(
+            asyncio.gather(*[_stock_summary(s) for s in stock_candidates]),
+            asyncio.gather(*[_crypto_summary(c) for c in crypto_candidates]),
+        )
+        stock_summaries = [r for r in stock_results if r]
+        crypto_summaries = [r for r in crypto_results if r]
+        _log(f"지표 계산 완료 — 주식 {len(stock_summaries)}개, 코인 {len(crypto_summaries)}개")
+
+        # 4. AI 의사결정
+        _log(f"AI 분석 요청 중 ({config.AI_PROVIDER})...")
         portfolio_status = {
-            "stock_cash": stock_portfolio.get("cash", 0),
-            "crypto_cash": crypto_portfolio.get("cash", 0),
-            "stock_budget_per_position": round(stock_budget),
-            "stock_holdings": stock_portfolio.get("holdings", []),
-            "crypto_holdings": crypto_portfolio.get("holdings", []),
+            "stock_cash": stock_cash,
+            "crypto_cash": crypto_cash,
+            "stock_holdings": stock_holdings,
+            "crypto_holdings": crypto_holdings,
         }
-        ai_result = ai_engine.analyze_and_decide(stock_summaries, crypto_summaries, portfolio_status)
+        ai_result = await asyncio.to_thread(
+            ai_engine.analyze_and_decide, stock_summaries, crypto_summaries, portfolio_status
+        )
 
         _state["last_decisions"] = ai_result.get("decisions", [])
         _state["market_summary"] = ai_result.get("market_summary", "")
         _state["last_summaries"] = stock_summaries + crypto_summaries
 
-        # 6. 매매 실행
+        decisions = ai_result.get("decisions", [])
+        buy_cnt  = sum(1 for d in decisions if d.get("action") == "BUY")
+        sell_cnt = sum(1 for d in decisions if d.get("action") == "SELL")
+        hold_cnt = sum(1 for d in decisions if d.get("action") == "HOLD")
+        _log(f"AI 결정 완료: BUY {buy_cnt}건, SELL {sell_cnt}건, HOLD {hold_cnt}건")
+
+        # 5. 매매 실행
         executed = []
-        for decision in ai_result.get("decisions", []):
-            action = decision.get("action", "HOLD")
+        for decision in decisions:
+            action     = decision.get("action", "HOLD")
             confidence = decision.get("confidence", 0)
-            reason = decision.get("reason", "")
-            ticker = decision.get("ticker", "")
-            name = decision.get("name", ticker)
+            reason     = decision.get("reason", "")
+            ticker     = decision.get("ticker", "")
+            name       = decision.get("name", ticker)
+            amount_krw = decision.get("amount_krw")
 
+            if action == "HOLD":
+                continue
+
+            _log(f"주문 실행: {action} {name}({ticker}) confidence={confidence:.2f}")
             if ticker.startswith("KRW-"):
-                result = executor.execute_crypto(ticker, action, confidence, reason, crypto_portfolio)
+                result = await asyncio.to_thread(
+                    executor.execute_crypto, ticker, action, confidence, reason, crypto_portfolio, amount_krw
+                )
             else:
-                result = executor.execute_stock(ticker, name, action, confidence, reason, stock_portfolio)
+                result = await asyncio.to_thread(
+                    executor.execute_stock, ticker, name, action, confidence, reason, stock_portfolio, amount_krw
+                )
 
-            if result.get("status") == "executed":
+            status = result.get("status")
+            if status == "executed":
+                amt = result.get("amount", result.get("amount_krw", 0))
+                _log(f"✓ 체결: {action} {name} {amt:,.0f}원")
                 executed.append(result)
+            elif status == "skipped":
+                _log(f"→ 스킵: {name} — {result.get('reason', '')}")
+            else:
+                _log(f"✗ 오류: {name} — {result.get('error', '')}", "error")
 
         _state["last_trades"] = executed
         _state["last_run"] = datetime.now().isoformat()
-        logger.info(f"=== 사이클 완료: {len(executed)}건 실행 ===")
+        _log(f"=== 사이클 완료: {len(executed)}건 체결 ===")
 
     except Exception as e:
         logger.error(f"사이클 오류: {e}", exc_info=True)
+        _log(f"사이클 오류: {e}", "error")
         _state["errors"].append(str(e))
 
 
@@ -164,9 +217,8 @@ async def start_bot():
         scheduler.start()
     except SchedulerAlreadyRunningError:
         pass
-    # 첫 사이클은 백그라운드로 실행 (HTTP 응답 블로킹 방지)
     asyncio.create_task(run_cycle())
-    logger.info(f"봇 시작 (주기: {config.TRADE_INTERVAL_MINUTES}분)")
+    _log(f"봇 시작 — {config.TRADE_INTERVAL_MINUTES}분 주기로 자동 매매")
 
 
 async def stop_bot():
@@ -177,7 +229,7 @@ async def stop_bot():
             scheduler.remove_job("trade_cycle")
     except Exception:
         pass
-    logger.info("봇 정지")
+    _log("봇 정지")
 
 
 async def run_once():

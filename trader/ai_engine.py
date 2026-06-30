@@ -12,22 +12,25 @@ from config import config
 
 logger = logging.getLogger(__name__)
 
-SYSTEM_PROMPT = """당신은 전문 퀀트 트레이더 AI입니다. 기술적 지표를 분석하여 매매 결정을 내립니다.
+SYSTEM_PROMPT = """당신은 전문 퀀트 트레이더 AI입니다. 기술적 지표를 분석하여 매매 결정과 투자 금액을 직접 결정합니다.
 
-규칙:
-1. 각 종목/코인에 대해 BUY, SELL, HOLD 중 하나를 결정합니다
-2. 결정에는 반드시 신뢰도(0.0~1.0)와 이유를 포함합니다
-3. 신뢰도 0.7 미만이면 HOLD를 권장합니다
-4. 과매수(RSI>70) + MACD 데드크로스 → 매도 신호
-5. 과매도(RSI<30) + MACD 골든크로스 → 매수 신호
-6. 볼린저밴드 하단 이탈 후 회귀 → 매수 기회
-7. 거래량 급증 + 가격 상승 → 강력한 매수 신호
-8. BUY 결정은 1주 가격이 종목당 예산(portfolio의 stock_budget_per_position) 이하인
-   종목에만 내립니다. 예산을 초과해 1주도 살 수 없으면 HOLD로 처리하세요.
-   (예산 정보가 없거나 0이면 이 제약은 무시합니다)
-9. 반드시 JSON 형식으로만 응답하세요
+판단 기준:
+- RSI, MACD, 볼린저밴드, 거래량 등 기술적 지표를 종합적으로 고려합니다
+- BUY: 상승 신호가 명확할 때. amount_krw에 투자할 금액(원)을 직접 지정하세요
+  - 잔고(stock_cash 또는 crypto_cash)를 초과할 수 없습니다
+  - 코인은 최소 5,000원 이상이어야 합니다
+  - 신호 강도에 따라 잔고의 20~50% 범위에서 결정하세요
+  - 보유 종목 수 제한 없음 — 신호가 좋으면 여러 종목 동시 매수 가능
+- SELL: 하락/과매수 신호 또는 수익 실현 시. 보유 전량 매도합니다
+- HOLD: 명확한 신호가 없을 때
+- confidence가 0.6 미만이면 HOLD 권장
 
-응답 형식 (반드시 이 JSON만):
+[중요] ticker 규칙:
+- 주식: 6자리 숫자 코드 (예: 005930)
+- 코인: KRW-로 시작 (예: KRW-BTC)
+- 해당 데이터가 없으면 그 유형의 항목을 decisions에 포함하지 마세요
+
+응답 형식 (JSON만):
 {
   "decisions": [
     {
@@ -35,8 +38,8 @@ SYSTEM_PROMPT = """당신은 전문 퀀트 트레이더 AI입니다. 기술적 �
       "ticker": "티커/코드",
       "action": "BUY|SELL|HOLD",
       "confidence": 0.0~1.0,
-      "reason": "결정 이유 (한국어, 2~3문장)",
-      "target_ratio": 0.0~1.0
+      "amount_krw": 매수금액_정수(BUY일때만),
+      "reason": "결정 이유 (한국어, 2~3문장)"
     }
   ],
   "market_summary": "전반적인 시장 상황 요약 (한국어, 2~3문장)"
@@ -82,6 +85,37 @@ def _chat(messages: list[dict], max_tokens: int = 4096, force_json: bool = True)
             logger.warning(f"Anthropic 호출 실패: {e}")
             return None
 
+    if config.AI_PROVIDER == "gemini":
+        if not config.GEMINI_API_KEY:
+            return None
+        try:
+            system = next((m["content"] for m in messages if m["role"] == "system"), None)
+            chat_msgs = [m for m in messages if m["role"] != "system"]
+            body = {
+                "contents": [
+                    {"role": "user", "parts": [{"text": m["content"]}]}
+                    for m in chat_msgs
+                ],
+                "generationConfig": {
+                    "temperature": 0.3,
+                    "maxOutputTokens": max_tokens,
+                },
+            }
+            if system:
+                body["system_instruction"] = {"parts": [{"text": system}]}
+            if force_json:
+                body["generationConfig"]["responseMimeType"] = "application/json"
+            url = (
+                f"https://generativelanguage.googleapis.com/v1beta/models"
+                f"/{config.GEMINI_MODEL}:generateContent?key={config.GEMINI_API_KEY}"
+            )
+            resp = requests.post(url, json=body, timeout=60)
+            resp.raise_for_status()
+            return resp.json()["candidates"][0]["content"]["parts"][0]["text"]
+        except Exception as e:
+            logger.warning(f"Gemini 호출 실패 (model={config.GEMINI_MODEL}): {e}")
+            return None
+
     # 기본: Ollama (로컬)
     try:
         body = {
@@ -91,13 +125,30 @@ def _chat(messages: list[dict], max_tokens: int = 4096, force_json: bool = True)
             "options": {"temperature": 0.3, "num_predict": max_tokens},
         }
         if force_json:
-            body["format"] = "json"  # Ollama가 유효한 JSON만 출력하도록 강제
+            body["format"] = "json"
         resp = requests.post(f"{config.OLLAMA_HOST}/api/chat", json=body, timeout=120)
         resp.raise_for_status()
         return resp.json().get("message", {}).get("content")
     except Exception as e:
         logger.warning(f"Ollama 호출 실패 ({config.OLLAMA_HOST}, model={config.OLLAMA_MODEL}): {e}")
         return None
+
+
+def _validate_decisions(decisions: list[dict], stock_summaries: list[str], crypto_summaries: list[str]) -> list[dict]:
+    """AI 응답의 ticker가 올바른 시장(주식/코인)에 속하는지 검증."""
+    has_stocks = bool(stock_summaries)
+    has_crypto = bool(crypto_summaries)
+    valid = []
+    for d in decisions:
+        ticker = d.get("ticker", "")
+        is_crypto = ticker.upper().startswith("KRW-")
+        if is_crypto and has_crypto:
+            valid.append(d)
+        elif not is_crypto and has_stocks and re.match(r"^\d{5,6}$", ticker):
+            valid.append(d)
+        else:
+            logger.debug(f"잘못된 ticker 제거: {ticker} (is_crypto={is_crypto}, has_stocks={has_stocks}, has_crypto={has_crypto})")
+    return valid
 
 
 def analyze_and_decide(
@@ -118,8 +169,7 @@ def analyze_and_decide(
 {chr(10).join(crypto_summaries) if crypto_summaries else '코인 데이터 없음'}
 
 위 데이터를 분석하여 각 종목/코인에 대한 매매 결정을 JSON 형식으로 출력하세요.
-현재 보유 중인 종목이 있다면 손절/익절 기준도 적용하세요.
-(손절: -{config.STOP_LOSS_RATIO*100:.0f}%, 익절: +{config.TAKE_PROFIT_RATIO*100:.0f}%)"""
+보유 종목이 있다면 현재 기술적 지표를 기준으로 수익 실현 또는 손실 최소화 여부를 판단하세요."""
 
     text = _chat(
         [
@@ -138,6 +188,7 @@ def analyze_and_decide(
         result = json.loads(text)
         result.setdefault("decisions", [])
         result.setdefault("market_summary", "")
+        result["decisions"] = _validate_decisions(result["decisions"], stock_summaries, crypto_summaries)
         return result
     except json.JSONDecodeError:
         # 응답이 잘린 경우 decisions 배열까지만 추출 시도

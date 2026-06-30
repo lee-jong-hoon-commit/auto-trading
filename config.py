@@ -20,7 +20,7 @@ class Config:
     UPBIT_ACCESS_KEY: str = os.getenv("UPBIT_ACCESS_KEY", "")
     UPBIT_SECRET_KEY: str = os.getenv("UPBIT_SECRET_KEY", "")
 
-    # AI 엔진 프로바이더: "ollama"(로컬·무료, 기본) | "anthropic"(Claude)
+    # AI 엔진 프로바이더: "ollama"(로컬·무료, 기본) | "anthropic"(Claude) | "gemini"
     AI_PROVIDER: str = os.getenv("AI_PROVIDER", "ollama").lower()
     # Ollama (로컬 LLM) — API 키/결제 불필요
     OLLAMA_HOST: str = os.getenv("OLLAMA_HOST", "http://localhost:11434")
@@ -28,14 +28,15 @@ class Config:
     # Anthropic (선택)
     ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
     ANTHROPIC_MODEL: str = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
+    # Google Gemini (선택) — 무료 티어 있음
+    GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
+    GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
 
     # Trading
     TRADE_INTERVAL_MINUTES: int = int(os.getenv("TRADE_INTERVAL_MINUTES", "30"))
-    MAX_POSITION_RATIO: float = float(os.getenv("MAX_POSITION_RATIO", "0.1"))
-    STOP_LOSS_RATIO: float = float(os.getenv("STOP_LOSS_RATIO", "0.05"))
-    TAKE_PROFIT_RATIO: float = float(os.getenv("TAKE_PROFIT_RATIO", "0.15"))
-    MAX_STOCK_POSITIONS: int = int(os.getenv("MAX_STOCK_POSITIONS", "5"))
-    MAX_CRYPTO_POSITIONS: int = int(os.getenv("MAX_CRYPTO_POSITIONS", "3"))
+    # AI가 포지션 수/금액/손절·익절을 자율 결정 — 아래는 분석 후보 상한선(성능용)
+    STOCK_ANALYSIS_LIMIT: int = 10   # 1회 사이클에 기술적 지표 계산할 최대 주식 수
+    CRYPTO_ANALYSIS_LIMIT: int = 8   # 1회 사이클에 기술적 지표 계산할 최대 코인 수
     # 업비트 최소 주문 금액(원). 이 금액 미만은 매수/매도 불가 → 먼지 잔고로 간주
     UPBIT_MIN_ORDER_KRW: int = int(os.getenv("UPBIT_MIN_ORDER_KRW", "5000"))
     # 사용자 지정 분석 종목(쉼표 구분 종목코드, 예: "005930,000660").
@@ -58,10 +59,10 @@ class Config:
 
     @property
     def is_ai_ready(self) -> bool:
-        # Ollama는 로컬 모델이라 항상 사용 가능(미실행 시 호출에서 자동 폴백).
-        # Anthropic은 키가 있어야 사용 가능.
         if self.AI_PROVIDER == "ollama":
             return True
+        if self.AI_PROVIDER == "gemini":
+            return bool(self.GEMINI_API_KEY)
         return bool(self.ANTHROPIC_API_KEY)
 
 

@@ -41,10 +41,8 @@ def get_balance() -> dict:
             value = qty * current
             profit_rate = ((current - avg) / avg * 100) if avg > 0 else 0
             total += value
-            # 먼지 잔고(매도 불가, 최소 주문 금액 미만)는 보유목록에서 제외.
-            # 단, 가격 조회 실패(current==0)로 평가액이 0이 된 경우는 숨기지 않는다.
-            is_dust = current > 0 and value < config.UPBIT_MIN_ORDER_KRW
-            if qty > 0 and not is_dust:
+            # 100원 미만 잔고만 제외 (매도 가능 여부는 executor에서 판단)
+            if qty > 0 and value >= 100:
                 holdings.append({
                     "ticker": ticker,
                     "currency": currency,

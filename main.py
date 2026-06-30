@@ -54,8 +54,7 @@ def print_config_status():
     table.add_row("업비트 API", status(config.is_upbit_ready), "")
     table.add_row("Claude AI", status(config.is_ai_ready), "claude-sonnet-4-6")
     table.add_row("분석 주기", f"[cyan]{config.TRADE_INTERVAL_MINUTES}분[/cyan]", "")
-    table.add_row("손절 기준", f"[red]-{config.STOP_LOSS_RATIO*100:.0f}%[/red]", "")
-    table.add_row("익절 기준", f"[green]+{config.TAKE_PROFIT_RATIO*100:.0f}%[/green]", "")
+    table.add_row("포지션 관리", "[cyan]AI 자율 결정[/cyan]", "금액·손익절 모두")
 
     console.print(table)
 

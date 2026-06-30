@@ -24,23 +24,29 @@ def _save_trade(record: dict):
     LOG_FILE.write_text(json.dumps(trades[-500:], ensure_ascii=False, indent=2))  # 최근 500건
 
 
-def execute_stock(code: str, name: str, action: str, confidence: float, reason: str, portfolio: dict) -> dict:
+def execute_stock(code: str, name: str, action: str, confidence: float, reason: str,
+                  portfolio: dict, amount_krw: float = None) -> dict:
     """주식 매매 실행"""
     if action == "HOLD":
         return {"status": "skipped", "reason": "HOLD 결정"}
 
-    if confidence < 0.7:
+    if confidence < 0.6:
         return {"status": "skipped", "reason": f"신뢰도 부족 ({confidence:.2f})"}
 
     try:
         current_price = kis_client.get_current_price(code)
         cash = portfolio.get("cash", 0)
 
+        if not current_price or current_price <= 0:
+            return {"status": "skipped", "reason": f"현재가 조회 실패 ({code})"}
+
         if action == "BUY":
-            budget = cash * config.MAX_POSITION_RATIO
+            # AI가 지정한 금액 사용, 없으면 잔고의 20% (최소 거래 단위 확보)
+            budget = float(amount_krw) if amount_krw else cash * 0.2
+            budget = min(budget, cash * 0.8)  # 최대 잔고 80% 안전 제한
             qty = int(budget // current_price)
             if qty < 1:
-                return {"status": "skipped", "reason": "예산 부족"}
+                return {"status": "skipped", "reason": f"예산 부족 ({budget:,.0f}원으로 {current_price:,.0f}원짜리 매수 불가)"}
             result = kis_client.place_order(code, qty, int(current_price), "buy")
             record = {
                 "time": datetime.now().isoformat(),
@@ -88,22 +94,28 @@ def execute_stock(code: str, name: str, action: str, confidence: float, reason: 
         return {"status": "error", "error": str(e)}
 
 
-def execute_crypto(ticker: str, action: str, confidence: float, reason: str, portfolio: dict) -> dict:
+def execute_crypto(ticker: str, action: str, confidence: float, reason: str,
+                   portfolio: dict, amount_krw: float = None) -> dict:
     """코인 매매 실행"""
     if action == "HOLD":
         return {"status": "skipped", "reason": "HOLD 결정"}
 
-    if confidence < 0.7:
+    if confidence < 0.6:
         return {"status": "skipped", "reason": f"신뢰도 부족 ({confidence:.2f})"}
 
     try:
         current_price = upbit_client.get_current_price(ticker)
         cash = portfolio.get("cash", 0)
 
+        if not current_price or current_price <= 0:
+            return {"status": "skipped", "reason": f"현재가 조회 실패 ({ticker})"}
+
         if action == "BUY":
-            amount = cash * config.MAX_POSITION_RATIO
+            # AI가 지정한 금액 사용, 없으면 잔고의 20%
+            amount = float(amount_krw) if amount_krw else cash * 0.2
+            amount = min(amount, cash * 0.8)  # 최대 잔고 80% 안전 제한
             if amount < config.UPBIT_MIN_ORDER_KRW:
-                return {"status": "skipped", "reason": f"예산 부족 (최소 {config.UPBIT_MIN_ORDER_KRW:,}원)"}
+                return {"status": "skipped", "reason": f"매수금액 부족 ({amount:,.0f}원 < 최소 {config.UPBIT_MIN_ORDER_KRW:,}원)"}
             result = upbit_client.place_order(ticker, "buy", amount_krw=amount)
             record = {
                 "time": datetime.now().isoformat(),
@@ -150,33 +162,6 @@ def execute_crypto(ticker: str, action: str, confidence: float, reason: str, por
         logger.error(f"[CRYPTO] 주문 실패 {ticker}: {e}")
         return {"status": "error", "error": str(e)}
 
-
-def check_stop_loss_take_profit(stock_portfolio: dict, crypto_portfolio: dict) -> list[dict]:
-    """손절/익절 자동 체크"""
-    actions = []
-
-    for h in stock_portfolio.get("holdings", []):
-        rate = h.get("profit_rate", 0)
-        if rate <= -config.STOP_LOSS_RATIO * 100:
-            actions.append({"type": "stock", "code": h["code"], "name": h["name"],
-                           "action": "SELL", "reason": f"손절 발동 ({rate:.2f}%)"})
-        elif rate >= config.TAKE_PROFIT_RATIO * 100:
-            actions.append({"type": "stock", "code": h["code"], "name": h["name"],
-                           "action": "SELL", "reason": f"익절 발동 ({rate:.2f}%)"})
-
-    for h in crypto_portfolio.get("holdings", []):
-        rate = h.get("profit_rate", 0)
-        value = h.get("value", h.get("qty", 0) * h.get("current_price", 0))
-        if value < config.UPBIT_MIN_ORDER_KRW:  # 업비트 최소 주문 금액 미달 → 매도 불가 잔고 제외
-            continue
-        if rate <= -config.STOP_LOSS_RATIO * 100:
-            actions.append({"type": "crypto", "ticker": h["ticker"],
-                           "action": "SELL", "reason": f"손절 발동 ({rate:.2f}%)"})
-        elif rate >= config.TAKE_PROFIT_RATIO * 100:
-            actions.append({"type": "crypto", "ticker": h["ticker"],
-                           "action": "SELL", "reason": f"익절 발동 ({rate:.2f}%)"})
-
-    return actions
 
 
 def get_trade_history(limit: int = 50) -> list:

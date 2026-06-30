@@ -1,6 +1,7 @@
 """FastAPI 웹 대시보드"""
 import asyncio
 import json
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
@@ -8,7 +9,17 @@ from pathlib import Path
 from config import config
 from trader import bot, executor
 
-app = FastAPI(title="Auto Trader Dashboard")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """서버 시작 시 봇 자동 시작"""
+    if config.is_kis_ready or config.is_upbit_ready:
+        await bot.start_bot()
+    yield
+    await bot.stop_bot()
+
+
+app = FastAPI(title="Auto Trader Dashboard", lifespan=lifespan)
 
 TEMPLATE = Path(__file__).parent / "templates" / "index.html"
 
@@ -36,8 +47,6 @@ async def status():
             "ai_provider": config.AI_PROVIDER,
             "mock_mode": config.KIS_MOCK,
             "interval_min": config.TRADE_INTERVAL_MINUTES,
-            "stop_loss": config.STOP_LOSS_RATIO,
-            "take_profit": config.TAKE_PROFIT_RATIO,
         },
     }
 
@@ -47,20 +56,27 @@ async def stream():
     """SSE 실시간 스트림"""
     async def event_generator():
         from trader import kis_client, upbit_client
-        last_trade_count = 0
+        import time
+        # 잔고는 30초마다 갱신 (KIS API 느림 방지)
+        cached_portfolio = {"stock": {}, "crypto": {}}
+        last_balance_fetch = 0
+
         while True:
             try:
                 state = bot.get_state()
-                # 포트폴리오
-                portfolio = {}
-                try:
-                    portfolio["stock"] = kis_client.get_balance() if config.is_kis_ready else {}
-                except Exception:
-                    portfolio["stock"] = {}
-                try:
-                    portfolio["crypto"] = upbit_client.get_balance() if config.is_upbit_ready else {}
-                except Exception:
-                    portfolio["crypto"] = {}
+                now = time.time()
+                if now - last_balance_fetch >= 30:
+                    try:
+                        if config.is_kis_ready:
+                            cached_portfolio["stock"] = await asyncio.to_thread(kis_client.get_balance)
+                    except Exception:
+                        pass
+                    try:
+                        if config.is_upbit_ready:
+                            cached_portfolio["crypto"] = await asyncio.to_thread(upbit_client.get_balance)
+                    except Exception:
+                        pass
+                    last_balance_fetch = now
 
                 trades = executor.get_trade_history(20)
                 data = {
@@ -70,9 +86,10 @@ async def stream():
                     "decisions": state["last_decisions"],
                     "summaries": state["last_summaries"],
                     "errors": state["errors"],
-                    "portfolio": portfolio,
+                    "portfolio": cached_portfolio,
                     "trades": trades,
                     "trade_count": len(trades),
+                    "activity_log": state.get("activity_log", []),
                 }
                 yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
             except Exception as e:
@@ -124,13 +141,11 @@ async def analyze_only():
         except Exception:
             crypto_balance = {"cash": 0, "holdings": []}
 
-        stock_budget = stock_balance.get("cash", 0) * config.MAX_POSITION_RATIO
-
-        # 주요 주식 분석: 그날그날 거래대금 상위(동적) + 관심종목을 합쳐 예산 내 종목만 선별
+        # 주요 주식 분석: 그날그날 거래대금 상위(동적) + 관심종목
         affordable_count = 0
         universe_source = ""
         if config.is_kis_ready:
-            dynamic = kis_client.get_dynamic_stocks(budget=stock_budget, limit=25)
+            dynamic = kis_client.get_dynamic_stocks(budget=None, limit=25)
             if dynamic:
                 universe_source = "거래대금 상위"
                 dyn_codes = {d["code"] for d in dynamic}
@@ -138,9 +153,9 @@ async def analyze_only():
             else:
                 universe_source = "관심종목"
                 merged = watchlist.get_stocks()
-            affordable = kis_client.select_affordable_stocks(merged, stock_budget, limit=15)
-            affordable_count = len(affordable)
-            for s in affordable:
+            candidates = merged[:15]  # 분석 시 예산 필터 제거 (매수 시 executor에서 체크)
+            affordable_count = len(candidates)
+            for s in candidates:
                 try:
                     df = kis_client.get_ohlcv(s["code"])
                     if df.empty:
@@ -163,7 +178,6 @@ async def analyze_only():
         portfolio_status = {
             "stock_cash": stock_balance.get("cash", 0),
             "crypto_cash": crypto_balance.get("cash", 0),
-            "stock_budget_per_position": round(stock_budget),
             "stock_holdings": stock_balance.get("holdings", []),
             "crypto_holdings": crypto_balance.get("holdings", []),
         }
@@ -175,8 +189,7 @@ async def analyze_only():
         state["last_run"] = __import__("datetime").datetime.now().isoformat()
 
         return {"ok": True, "decisions": state["last_decisions"], "market_summary": state["market_summary"],
-                "stock_budget": round(stock_budget), "affordable_stocks": affordable_count,
-                "universe_source": universe_source}
+                "analyzed_stocks": affordable_count, "universe_source": universe_source}
 
     except Exception as e:
         state["errors"].append(str(e))
