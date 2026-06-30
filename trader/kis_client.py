@@ -10,6 +10,38 @@ from config import config
 
 TOKEN_CACHE = Path(__file__).parent.parent / "data" / "kis_token.json"
 
+# 시가총액 순위 API 실패 시 사용할 기본 분석 종목(대형 우량주)
+DEFAULT_STOCKS = [
+    {"code": "005930", "name": "삼성전자"},
+    {"code": "000660", "name": "SK하이닉스"},
+    {"code": "373220", "name": "LG에너지솔루션"},
+    {"code": "207940", "name": "삼성바이오로직스"},
+    {"code": "005380", "name": "현대차"},
+    {"code": "000270", "name": "기아"},
+    {"code": "035420", "name": "NAVER"},
+    {"code": "035720", "name": "카카오"},
+    {"code": "051910", "name": "LG화학"},
+    {"code": "006400", "name": "삼성SDI"},
+    {"code": "005490", "name": "POSCO홀딩스"},
+    {"code": "068270", "name": "셀트리온"},
+    {"code": "105560", "name": "KB금융"},
+    {"code": "055550", "name": "신한지주"},
+    {"code": "003550", "name": "LG"},
+]
+
+
+def get_analysis_stocks() -> list[dict]:
+    """기본 분석 대상 종목 목록을 반환.
+
+    config.CUSTOM_STOCKS(쉼표 구분 종목코드)가 설정돼 있으면 이를 우선 사용하고,
+    없으면 DEFAULT_STOCKS를 사용한다. 시가총액 순위 API가 실패할 때의 폴백으로도 쓰인다.
+    """
+    codes = [c.strip() for c in config.CUSTOM_STOCKS.split(",") if c.strip()]
+    if codes:
+        name_map = {s["code"]: s["name"] for s in DEFAULT_STOCKS}
+        return [{"code": c, "name": name_map.get(c, c)} for c in codes]
+    return list(DEFAULT_STOCKS)
+
 
 def _get_token() -> str:
     if TOKEN_CACHE.exists():
@@ -87,23 +119,23 @@ def get_balance() -> dict:
 
 
 def get_ohlcv(code: str, days: int = 100) -> pd.DataFrame:
-    """주가 OHLCV 데이터 조회"""
-    end = datetime.now().strftime("%Y%m%d")
-    start = (datetime.now() - timedelta(days=days * 2)).strftime("%Y%m%d")
+    """주가 OHLCV 데이터 조회
+
+    inquire-daily-price(FHKST01010400) 사용. 최근 약 30영업일치를 반환한다.
+    (구 inquire-daily-chartprice 엔드포인트는 일부 계정에서 404를 반환하여 교체)
+    """
     resp = requests.get(
-        f"{config.KIS_BASE_URL}/uapi/domestic-stock/v1/quotations/inquire-daily-chartprice",
-        headers=_headers("FHKST03010100"),
+        f"{config.KIS_BASE_URL}/uapi/domestic-stock/v1/quotations/inquire-daily-price",
+        headers=_headers("FHKST01010400"),
         params={
             "FID_COND_MRKT_DIV_CODE": "J",
             "FID_INPUT_ISCD": code,
-            "FID_INPUT_DATE_1": start,
-            "FID_INPUT_DATE_2": end,
-            "FID_PERIOD_DIV_CODE": "D",
-            "FID_ORG_ADJ_PRC": "0",
+            "FID_PERIOD_DIV_CODE": "D",   # D:일 W:주 M:월
+            "FID_ORG_ADJ_PRC": "0",       # 0:수정주가 1:원주가
         },
     )
     resp.raise_for_status()
-    rows = resp.json().get("output2", [])
+    rows = resp.json().get("output", [])
     if not rows:
         return pd.DataFrame()
     df = pd.DataFrame(rows).rename(columns={
@@ -157,10 +189,10 @@ def get_top_stocks(market: str = "KOSPI", limit: int = 20) -> list[dict]:
     """시가총액 상위 종목 조회"""
     resp = requests.get(
         f"{config.KIS_BASE_URL}/uapi/domestic-stock/v1/ranking/market-cap",
-        headers=_headers("FHPST01710000"),
+        headers=_headers("FHPST01740000"),
         params={
             "fid_cond_mrkt_div_code": "J",
-            "fid_cond_scr_div_code": "20171",
+            "fid_cond_scr_div_code": "20174",
             "fid_div_cls_code": "0" if market == "KOSPI" else "1",
             "fid_input_iscd": "0001" if market == "KOSPI" else "1001",
             "fid_trgt_cls_code": "0",

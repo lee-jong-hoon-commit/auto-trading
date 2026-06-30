@@ -104,8 +104,6 @@ async def run_once():
 @app.post("/api/analyze")
 async def analyze_only():
     """매매 실행 없이 AI 분석만 수행"""
-    import requests
-    import pandas as pd
     from trader import kis_client, upbit_client, analyzer, ai_engine
 
     state = bot.get_state()
@@ -115,39 +113,21 @@ async def analyze_only():
         stock_summaries = []
         crypto_summaries = []
 
-        # 주요 주식 분석
+        # 주요 주식 분석 (OHLCV 조회는 kis_client.get_ohlcv로 통일)
         if config.is_kis_ready:
-            stocks = [
-                ("005930", "삼성전자"), ("000660", "SK하이닉스"), ("005380", "현대차"),
-                ("035720", "카카오"), ("003550", "LG"), ("068270", "셀트리온"),
-            ]
-            for code, name in stocks:
+            for s in kis_client.get_analysis_stocks():
                 try:
-                    resp = requests.get(
-                        f"{config.KIS_BASE_URL}/uapi/domestic-stock/v1/quotations/inquire-daily-price",
-                        headers=kis_client._headers("FHKST01010400"),
-                        params={"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": code,
-                                "FID_PERIOD_DIV_CODE": "D", "FID_ORG_ADJ_PRC": "0"},
-                    )
-                    rows = resp.json().get("output", [])
-                    if not rows:
+                    df = kis_client.get_ohlcv(s["code"])
+                    if df.empty:
                         continue
-                    df = pd.DataFrame(rows).rename(columns={
-                        "stck_bsop_date": "date", "stck_oprc": "open", "stck_hgpr": "high",
-                        "stck_lwpr": "low", "stck_clpr": "close", "acml_vol": "volume",
-                    })[["date", "open", "high", "low", "close", "volume"]]
-                    for c in ["open", "high", "low", "close", "volume"]:
-                        df[c] = pd.to_numeric(df[c], errors="coerce")
-                    df["date"] = pd.to_datetime(df["date"])
-                    df = df.sort_values("date").reset_index(drop=True)
                     ind = analyzer.compute_indicators(df)
-                    stock_summaries.append(analyzer.summarize_for_ai(name, ind, "stock"))
+                    stock_summaries.append(analyzer.summarize_for_ai(s["name"], ind, "stock"))
                 except Exception:
                     pass
 
         # 주요 코인 분석
         if config.is_upbit_ready:
-            for ticker in ["KRW-BTC", "KRW-ETH", "KRW-XRP", "KRW-SOL", "KRW-DOGE"]:
+            for ticker in upbit_client.get_analysis_tickers():
                 try:
                     df = upbit_client.get_ohlcv(ticker, count=60)
                     ind = analyzer.compute_indicators(df)

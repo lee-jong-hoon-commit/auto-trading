@@ -102,8 +102,8 @@ def execute_crypto(ticker: str, action: str, confidence: float, reason: str, por
 
         if action == "BUY":
             amount = cash * config.MAX_POSITION_RATIO
-            if amount < 5000:
-                return {"status": "skipped", "reason": "예산 부족 (최소 5,000원)"}
+            if amount < config.UPBIT_MIN_ORDER_KRW:
+                return {"status": "skipped", "reason": f"예산 부족 (최소 {config.UPBIT_MIN_ORDER_KRW:,}원)"}
             result = upbit_client.place_order(ticker, "buy", amount_krw=amount)
             record = {
                 "time": datetime.now().isoformat(),
@@ -123,8 +123,8 @@ def execute_crypto(ticker: str, action: str, confidence: float, reason: str, por
                 return {"status": "skipped", "reason": "보유 코인 없음"}
             qty = holding["qty"]
             sell_value = current_price * qty
-            if sell_value < 5000:
-                return {"status": "skipped", "reason": f"매도 금액 부족 ({sell_value:.0f}원, 최소 5,000원)"}
+            if sell_value < config.UPBIT_MIN_ORDER_KRW:
+                return {"status": "skipped", "reason": f"매도 금액 부족 ({sell_value:.0f}원, 최소 {config.UPBIT_MIN_ORDER_KRW:,}원)"}
             result = upbit_client.place_order(ticker, "sell", qty=qty)
             record = {
                 "time": datetime.now().isoformat(),
@@ -167,7 +167,7 @@ def check_stop_loss_take_profit(stock_portfolio: dict, crypto_portfolio: dict) -
     for h in crypto_portfolio.get("holdings", []):
         rate = h.get("profit_rate", 0)
         value = h.get("value", h.get("qty", 0) * h.get("current_price", 0))
-        if value < 5000:  # 업비트 최소 주문 금액 미달 → 매도 불가 잔고 제외
+        if value < config.UPBIT_MIN_ORDER_KRW:  # 업비트 최소 주문 금액 미달 → 매도 불가 잔고 제외
             continue
         if rate <= -config.STOP_LOSS_RATIO * 100:
             actions.append({"type": "crypto", "ticker": h["ticker"],

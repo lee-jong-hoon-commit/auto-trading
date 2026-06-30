@@ -60,11 +60,7 @@ async def run_cycle():
                 top_stocks = kis_client.get_top_stocks("KOSPI", 30) + kis_client.get_top_stocks("KOSDAQ", 20)
             except Exception as e:
                 logger.warning(f"시가총액 조회 실패, 기본 종목 사용: {e}")
-                top_stocks = [
-                    {"code": "005930", "name": "삼성전자"}, {"code": "000660", "name": "SK하이닉스"},
-                    {"code": "005380", "name": "현대차"}, {"code": "035420", "name": "NAVER"},
-                    {"code": "003550", "name": "LG"}, {"code": "068270", "name": "셀트리온"},
-                ]
+                top_stocks = kis_client.get_analysis_stocks()
             screened = ai_engine.quick_screen(
                 [s for s in top_stocks if s["code"] not in held_codes], "stock"
             )

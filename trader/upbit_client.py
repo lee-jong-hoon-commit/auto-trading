@@ -41,7 +41,10 @@ def get_balance() -> dict:
             value = qty * current
             profit_rate = ((current - avg) / avg * 100) if avg > 0 else 0
             total += value
-            if qty > 0:
+            # 먼지 잔고(매도 불가, 최소 주문 금액 미만)는 보유목록에서 제외.
+            # 단, 가격 조회 실패(current==0)로 평가액이 0이 된 경우는 숨기지 않는다.
+            is_dust = current > 0 and value < config.UPBIT_MIN_ORDER_KRW
+            if qty > 0 and not is_dust:
                 holdings.append({
                     "ticker": ticker,
                     "currency": currency,
@@ -69,10 +72,22 @@ def get_current_price(ticker: str) -> float:
     return pyupbit.get_current_price(ticker) or 0.0
 
 
+DEFAULT_TICKERS = ["KRW-BTC", "KRW-ETH", "KRW-XRP", "KRW-SOL", "KRW-DOGE"]
+
+
 def get_top_tickers(limit: int = 20) -> list[str]:
     """KRW 마켓 거래량 상위 코인"""
     tickers = pyupbit.get_tickers(fiat="KRW")
     return tickers[:limit] if tickers else []
+
+
+def get_analysis_tickers() -> list[str]:
+    """기본 분석 대상 코인 목록.
+
+    config.CUSTOM_TICKERS가 설정돼 있으면 이를 우선 사용, 없으면 DEFAULT_TICKERS.
+    """
+    custom = [t.strip() for t in config.CUSTOM_TICKERS.split(",") if t.strip()]
+    return custom if custom else list(DEFAULT_TICKERS)
 
 
 def place_order(ticker: str, side: str, amount_krw: float = None, qty: float = None) -> dict:

@@ -30,6 +30,13 @@ class Config:
     TAKE_PROFIT_RATIO: float = float(os.getenv("TAKE_PROFIT_RATIO", "0.15"))
     MAX_STOCK_POSITIONS: int = int(os.getenv("MAX_STOCK_POSITIONS", "5"))
     MAX_CRYPTO_POSITIONS: int = int(os.getenv("MAX_CRYPTO_POSITIONS", "3"))
+    # 업비트 최소 주문 금액(원). 이 금액 미만은 매수/매도 불가 → 먼지 잔고로 간주
+    UPBIT_MIN_ORDER_KRW: int = int(os.getenv("UPBIT_MIN_ORDER_KRW", "5000"))
+    # 사용자 지정 분석 종목(쉼표 구분 종목코드, 예: "005930,000660").
+    # 설정 시 기본 종목 목록 대신 우선 사용.
+    CUSTOM_STOCKS: str = os.getenv("CUSTOM_STOCKS", "")
+    # 사용자 지정 분석 코인(쉼표 구분 마켓코드, 예: "KRW-BTC,KRW-ETH").
+    CUSTOM_TICKERS: str = os.getenv("CUSTOM_TICKERS", "")
 
     # Web
     WEB_HOST: str = os.getenv("WEB_HOST", "0.0.0.0")

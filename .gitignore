@@ -6,9 +6,12 @@
 # 토큰/데이터 캐시
 data/kis_token.json
 logs/trades.json
+logs/*.log
+*.log
 
 # 파이썬
 venv/
+.venv/
 __pycache__/
 *.pyc
 .pytest_cache/
