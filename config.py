@@ -20,8 +20,14 @@ class Config:
     UPBIT_ACCESS_KEY: str = os.getenv("UPBIT_ACCESS_KEY", "")
     UPBIT_SECRET_KEY: str = os.getenv("UPBIT_SECRET_KEY", "")
 
-    # Anthropic
+    # AI 엔진 프로바이더: "ollama"(로컬·무료, 기본) | "anthropic"(Claude)
+    AI_PROVIDER: str = os.getenv("AI_PROVIDER", "ollama").lower()
+    # Ollama (로컬 LLM) — API 키/결제 불필요
+    OLLAMA_HOST: str = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+    OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "qwen2.5")
+    # Anthropic (선택)
     ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
+    ANTHROPIC_MODEL: str = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
 
     # Trading
     TRADE_INTERVAL_MINUTES: int = int(os.getenv("TRADE_INTERVAL_MINUTES", "30"))
@@ -52,6 +58,10 @@ class Config:
 
     @property
     def is_ai_ready(self) -> bool:
+        # Ollama는 로컬 모델이라 항상 사용 가능(미실행 시 호출에서 자동 폴백).
+        # Anthropic은 키가 있어야 사용 가능.
+        if self.AI_PROVIDER == "ollama":
+            return True
         return bool(self.ANTHROPIC_API_KEY)
 
 

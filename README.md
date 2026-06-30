@@ -1,6 +1,7 @@
 # Auto Trader - AI 자동매매 시스템
 
-한국투자증권(주식) + 업비트(코인) Claude AI 자동매매
+한국투자증권(주식) + 업비트(코인) AI 자동매매. AI 엔진은 **Ollama(로컬·무료)** 가
+기본이며, 원하면 Claude(Anthropic)로 전환할 수 있습니다.
 
 ## 빠른 시작
 
@@ -21,7 +22,16 @@ cp .env.example .env
 |--------|-----------|
 | 한국투자증권 | https://apiportal.koreainvestment.com → 앱 신청 |
 | 업비트 | 마이페이지 → Open API 관리 |
-| Claude AI | https://console.anthropic.com → API Keys |
+| AI 엔진 | 기본은 Ollama(로컬·키 불필요). Claude 쓰려면 https://console.anthropic.com → API Keys |
+
+#### AI 엔진 (기본: Ollama, 무료)
+```bash
+# 1) Ollama 설치: https://ollama.com
+# 2) 모델 내려받기 (한 번만)
+ollama pull qwen2.5
+# 3) .env 에서 AI_PROVIDER=ollama (기본값) 확인 → 끝. API 키/결제 불필요
+```
+Claude로 바꾸려면 `.env`에 `AI_PROVIDER=anthropic` + `ANTHROPIC_API_KEY` 설정.
 
 ### 3. 실행
 
@@ -46,8 +56,8 @@ python main.py once
   ├── 콘솔 CLI (main.py)
   └── 웹 대시보드 (localhost:8000)
 
-AI 엔진 (Claude Sonnet)
-  ├── 종목/코인 1차 스크리닝 (Claude Haiku - 빠름)
+AI 엔진 (Ollama 로컬 / Claude 선택)
+  ├── 종목/코인 1차 스크리닝
   ├── 기술적 지표 분석 (RSI, MACD, 볼린저밴드, MA, Stochastic)
   └── 매수/매도/홀드 결정 + 신뢰도 산출
 

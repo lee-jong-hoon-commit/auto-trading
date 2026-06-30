@@ -215,10 +215,11 @@ async function refreshStatus() {
   const cfg = data.config || {};
 
   // API 상태
+  const aiLabel = 'AI 엔진' + (cfg.ai_provider ? ` (${cfg.ai_provider})` : '');
   const chips = [
     { label: '한투증권 API', ok: cfg.kis_ready },
     { label: '업비트 API', ok: cfg.upbit_ready },
-    { label: 'Claude AI', ok: cfg.ai_ready },
+    { label: aiLabel, ok: cfg.ai_ready },
   ];
   document.getElementById('api-status').innerHTML = chips.map(c =>
     `<span class="api-chip ${c.ok ? 'chip-ok' : 'chip-err'}">${c.ok ? '✓' : '✗'} ${c.label}</span>`

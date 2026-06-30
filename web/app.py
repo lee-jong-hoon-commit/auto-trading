@@ -33,6 +33,7 @@ async def status():
             "kis_ready": config.is_kis_ready,
             "upbit_ready": config.is_upbit_ready,
             "ai_ready": config.is_ai_ready,
+            "ai_provider": config.AI_PROVIDER,
             "mock_mode": config.KIS_MOCK,
             "interval_min": config.TRADE_INTERVAL_MINUTES,
             "stop_loss": config.STOP_LOSS_RATIO,
