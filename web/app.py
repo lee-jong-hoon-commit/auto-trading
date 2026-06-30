@@ -113,9 +113,24 @@ async def analyze_only():
         stock_summaries = []
         crypto_summaries = []
 
-        # 주요 주식 분석 (OHLCV 조회는 kis_client.get_ohlcv로 통일, 대상은 관심종목)
+        # 잔고 먼저 조회 → 종목당 예산 산정
+        try:
+            stock_balance = kis_client.get_balance() if config.is_kis_ready else {"cash": 0, "holdings": []}
+        except Exception:
+            stock_balance = {"cash": 0, "holdings": []}
+        try:
+            crypto_balance = upbit_client.get_balance() if config.is_upbit_ready else {"cash": 0, "holdings": []}
+        except Exception:
+            crypto_balance = {"cash": 0, "holdings": []}
+
+        stock_budget = stock_balance.get("cash", 0) * config.MAX_POSITION_RATIO
+
+        # 주요 주식 분석: 관심종목 중 예산으로 매수 가능한 종목만 선별
+        affordable_count = 0
         if config.is_kis_ready:
-            for s in watchlist.get_stocks():
+            affordable = kis_client.select_affordable_stocks(watchlist.get_stocks(), stock_budget)
+            affordable_count = len(affordable)
+            for s in affordable:
                 try:
                     df = kis_client.get_ohlcv(s["code"])
                     if df.empty:
@@ -135,18 +150,10 @@ async def analyze_only():
                 except Exception:
                     pass
 
-        try:
-            stock_balance = kis_client.get_balance() if config.is_kis_ready else {"cash": 0, "holdings": []}
-        except Exception:
-            stock_balance = {"cash": 0, "holdings": []}
-        try:
-            crypto_balance = upbit_client.get_balance() if config.is_upbit_ready else {"cash": 0, "holdings": []}
-        except Exception:
-            crypto_balance = {"cash": 0, "holdings": []}
-
         portfolio_status = {
             "stock_cash": stock_balance.get("cash", 0),
             "crypto_cash": crypto_balance.get("cash", 0),
+            "stock_budget_per_position": round(stock_budget),
             "stock_holdings": stock_balance.get("holdings", []),
             "crypto_holdings": crypto_balance.get("holdings", []),
         }
@@ -157,7 +164,8 @@ async def analyze_only():
         state["last_summaries"] = stock_summaries + crypto_summaries
         state["last_run"] = __import__("datetime").datetime.now().isoformat()
 
-        return {"ok": True, "decisions": state["last_decisions"], "market_summary": state["market_summary"]}
+        return {"ok": True, "decisions": state["last_decisions"], "market_summary": state["market_summary"],
+                "stock_budget": round(stock_budget), "affordable_stocks": affordable_count}
 
     except Exception as e:
         state["errors"].append(str(e))

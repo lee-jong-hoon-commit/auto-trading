@@ -54,6 +54,9 @@ async def run_cycle():
         stock_candidates = []
         crypto_candidates = []
 
+        # 종목당 매수 예산 = 예수금 × 최대 비중. 이 예산으로 살 수 있는 종목만 후보로.
+        stock_budget = stock_portfolio.get("cash", 0) * config.MAX_POSITION_RATIO
+
         if config.is_kis_ready:
             held_codes = {h["code"] for h in stock_portfolio.get("holdings", [])}
             try:
@@ -61,9 +64,10 @@ async def run_cycle():
             except Exception as e:
                 logger.warning(f"시가총액 조회 실패, 관심종목 사용: {e}")
                 top_stocks = watchlist.get_stocks()
-            screened = ai_engine.quick_screen(
-                [s for s in top_stocks if s["code"] not in held_codes], "stock"
-            )
+            universe = [s for s in top_stocks if s["code"] not in held_codes]
+            affordable = kis_client.select_affordable_stocks(universe, stock_budget)
+            logger.info(f"분석 대상 종목: {len(affordable)}개 (예산 {stock_budget:,.0f}원/종목, 전체 {len(universe)}개 중)")
+            screened = ai_engine.quick_screen(affordable, "stock")
             stock_candidates = list(stock_portfolio.get("holdings", [])) + screened
             stock_candidates = stock_candidates[:config.MAX_STOCK_POSITIONS + 3]
 
@@ -104,6 +108,7 @@ async def run_cycle():
         portfolio_status = {
             "stock_cash": stock_portfolio.get("cash", 0),
             "crypto_cash": crypto_portfolio.get("cash", 0),
+            "stock_budget_per_position": round(stock_budget),
             "stock_holdings": stock_portfolio.get("holdings", []),
             "crypto_holdings": crypto_portfolio.get("holdings", []),
         }

@@ -10,24 +10,74 @@ from config import config
 
 TOKEN_CACHE = Path(__file__).parent.parent / "data" / "kis_token.json"
 
-# 시가총액 순위 API 실패 시 사용할 기본 분석 종목(대형 우량주)
+# 시가총액 순위 API 실패 시 사용할 기본 분석 종목.
+# 섹터/가격대를 다양화하여 잔고 규모에 맞는 종목을 폭넓게 탐색할 수 있게 한다.
 DEFAULT_STOCKS = [
+    # 반도체
     {"code": "005930", "name": "삼성전자"},
     {"code": "000660", "name": "SK하이닉스"},
-    {"code": "373220", "name": "LG에너지솔루션"},
-    {"code": "207940", "name": "삼성바이오로직스"},
+    {"code": "042700", "name": "한미반도체"},
+    # 자동차
     {"code": "005380", "name": "현대차"},
     {"code": "000270", "name": "기아"},
+    {"code": "012330", "name": "현대모비스"},
+    # 2차전지/화학
+    {"code": "373220", "name": "LG에너지솔루션"},
+    {"code": "006400", "name": "삼성SDI"},
+    {"code": "051910", "name": "LG화학"},
+    {"code": "011170", "name": "롯데케미칼"},
+    # 인터넷/게임/엔터
     {"code": "035420", "name": "NAVER"},
     {"code": "035720", "name": "카카오"},
-    {"code": "051910", "name": "LG화학"},
-    {"code": "006400", "name": "삼성SDI"},
-    {"code": "005490", "name": "POSCO홀딩스"},
+    {"code": "036570", "name": "엔씨소프트"},
+    {"code": "352820", "name": "하이브"},
+    # 바이오/제약
+    {"code": "207940", "name": "삼성바이오로직스"},
     {"code": "068270", "name": "셀트리온"},
+    {"code": "000100", "name": "유한양행"},
+    {"code": "128940", "name": "한미약품"},
+    # 금융
     {"code": "105560", "name": "KB금융"},
     {"code": "055550", "name": "신한지주"},
+    {"code": "086790", "name": "하나금융지주"},
+    {"code": "316140", "name": "우리금융지주"},
+    # 철강/소재/조선
+    {"code": "005490", "name": "POSCO홀딩스"},
+    {"code": "010130", "name": "고려아연"},
+    {"code": "009540", "name": "HD한국조선해양"},
+    {"code": "042660", "name": "한화오션"},
+    # 방산/항공
+    {"code": "012450", "name": "한화에어로스페이스"},
+    {"code": "047810", "name": "한국항공우주"},
+    # 소비/유통/통신/유틸리티
+    {"code": "097950", "name": "CJ제일제당"},
+    {"code": "282330", "name": "BGF리테일"},
+    {"code": "017670", "name": "SK텔레콤"},
+    {"code": "015760", "name": "한국전력"},
     {"code": "003550", "name": "LG"},
 ]
+
+
+def select_affordable_stocks(stocks: list[dict], budget: float, limit: int | None = None) -> list[dict]:
+    """예산(budget)으로 최소 1주 매수 가능한 종목만 선별한다.
+
+    각 항목에 현재가('price')를 채워서 반환한다. price가 없으면 현재가 API로 조회한다.
+    budget<=0(잔고 미확인 등)이면 필터링하지 않고 가격만 채워 그대로 반환한다.
+    """
+    out = []
+    for s in stocks:
+        price = float(s.get("price") or 0)
+        if price <= 0:
+            try:
+                price = get_current_price(s["code"])
+            except Exception:
+                price = 0.0
+        item = {**s, "price": price}
+        if budget <= 0 or 0 < price <= budget:
+            out.append(item)
+        if limit and len(out) >= limit:
+            break
+    return out
 
 
 def get_analysis_stocks() -> list[dict]:
