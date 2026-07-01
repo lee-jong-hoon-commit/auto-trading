@@ -58,13 +58,23 @@ async def stream():
         from trader import kis_client, upbit_client
         import time
         # 잔고는 30초마다 갱신 (KIS API 느림 방지)
+        # 단, 새 거래 체결이 감지되면 즉시 갱신
         cached_portfolio = {"stock": {}, "crypto": {}}
         last_balance_fetch = 0
+        last_trade_count = -1  # -1 = 초기화 전
 
         while True:
             try:
                 state = bot.get_state()
                 now = time.time()
+                trades = executor.get_trade_history(20)
+
+                # 새 거래 체결 감지 → 포트폴리오 즉시 갱신
+                new_trade_count = len(trades)
+                if last_trade_count >= 0 and new_trade_count > last_trade_count:
+                    last_balance_fetch = 0  # 캐시 무효화 → 다음 조건에서 즉시 재조회
+                last_trade_count = new_trade_count
+
                 if now - last_balance_fetch >= 30:
                     try:
                         if config.is_kis_ready:
@@ -77,8 +87,6 @@ async def stream():
                     except Exception:
                         pass
                     last_balance_fetch = now
-
-                trades = executor.get_trade_history(20)
                 data = {
                     "running": state["running"],
                     "last_run": state["last_run"],
@@ -193,6 +201,103 @@ async def analyze_only():
 
     except Exception as e:
         state["errors"].append(str(e))
+        return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
+
+
+
+
+@app.get("/api/stocks/search")
+async def search_stocks(q: str = ""):
+    """주식 종목명/코드 검색"""
+    from trader import kis_client, watchlist as wl
+    q = q.strip()
+    if not q:
+        return []
+
+    results, seen = [], set()
+
+    def add(code, name, price=None):
+        if code not in seen:
+            seen.add(code)
+            item = {"code": code, "name": name}
+            if price is not None:
+                item["price"] = price
+            results.append(item)
+
+    # 1. 관심종목 (우선순위 최상)
+    for s in wl.get_stocks():
+        if q in s.get("name", "") or q in s.get("code", ""):
+            add(s["code"], s.get("name", s["code"]))
+
+    # 2. 확장 종목 리스트
+    for s in kis_client.SEARCH_STOCKS:
+        if q in s["name"] or q in s["code"]:
+            add(s["code"], s["name"])
+
+    # 3. DEFAULT_STOCKS
+    for s in kis_client.DEFAULT_STOCKS:
+        if q in s["name"] or q in s["code"]:
+            add(s["code"], s["name"])
+
+    # 4. 실시간 거래대금 상위 (KIS 연결 시, 결과 부족할 때)
+    if config.is_kis_ready and len(results) < 5:
+        try:
+            stocks = await asyncio.to_thread(kis_client.get_volume_rank, "ALL", 0, 50)
+            for s in stocks:
+                if q in s.get("name", "") or q in s.get("code", ""):
+                    add(s["code"], s["name"], s.get("price"))
+        except Exception:
+            pass
+
+    return results[:10]
+
+
+@app.post("/api/guide")
+async def trading_guide(payload: dict):
+    """수동 투자 가이드: 단일 종목/코인 상세 분석"""
+    from trader import kis_client, upbit_client, analyzer, ai_engine
+    import logging
+    _log = logging.getLogger(__name__)
+
+    code = (payload.get("code") or "").strip()
+    ticker = (payload.get("ticker") or "").strip()
+    name = (payload.get("name") or "").strip()
+
+    if not code and not ticker:
+        return JSONResponse(status_code=400, content={"ok": False, "error": "code 또는 ticker를 입력하세요"})
+
+    try:
+        if code:
+            if not (len(code) == 6 and code.isdigit()):
+                return JSONResponse(status_code=400, content={"ok": False, "error": "종목코드는 6자리 숫자입니다"})
+            df = await asyncio.to_thread(kis_client.get_ohlcv, code)
+            if df is None or df.empty:
+                return JSONResponse(status_code=500, content={"ok": False, "error": "OHLCV 데이터를 가져올 수 없습니다"})
+            indicators = await asyncio.to_thread(analyzer.compute_indicators, df)
+            display_name = name or code
+            summary = analyzer.summarize_for_ai(display_name, indicators, "stock")
+            guide = await asyncio.to_thread(ai_engine.generate_guide, summary, "stock", display_name)
+            return {
+                "ok": True, "type": "stock", "code": code, "name": display_name,
+                "current_price": float(indicators.get("current_price", 0) or 0),
+                "summary": summary, "guide": guide,
+            }
+        else:
+            if not ticker.upper().startswith("KRW-"):
+                ticker = "KRW-" + ticker.upper()
+            df = await asyncio.to_thread(upbit_client.get_ohlcv, ticker, count=60)
+            if df is None or df.empty:
+                return JSONResponse(status_code=500, content={"ok": False, "error": "OHLCV 데이터를 가져올 수 없습니다"})
+            indicators = await asyncio.to_thread(analyzer.compute_indicators, df)
+            summary = analyzer.summarize_for_ai(ticker, indicators, "crypto")
+            guide = await asyncio.to_thread(ai_engine.generate_guide, summary, "crypto", ticker)
+            return {
+                "ok": True, "type": "crypto", "ticker": ticker,
+                "current_price": float(indicators.get("current_price", 0) or 0),
+                "summary": summary, "guide": guide,
+            }
+    except Exception as e:
+        _log.exception(f"Guide 분석 오류: {e}")
         return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
 
 

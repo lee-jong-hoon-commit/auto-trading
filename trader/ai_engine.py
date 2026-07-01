@@ -18,8 +18,10 @@ SYSTEM_PROMPT = """당신은 전문 퀀트 트레이더 AI입니다. 기술적 �
 - RSI, MACD, 볼린저밴드, 거래량 등 기술적 지표를 종합적으로 고려합니다
 - BUY: 상승 신호가 명확할 때. amount_krw에 투자할 금액(원)을 직접 지정하세요
   - 잔고(stock_cash 또는 crypto_cash)를 초과할 수 없습니다
+  - [주식 필수] 주식은 1주 단위만 매수 가능 → amount_krw는 반드시 현재가(현재가 필드) 이상이어야 합니다
+    예) 현재가 50,000원이면 amount_krw ≥ 50,000. 현재가가 stock_cash보다 비싸면 BUY 불가
   - 코인은 최소 5,000원 이상이어야 합니다
-  - 신호 강도에 따라 잔고의 20~50% 범위에서 결정하세요
+  - 신호 강도에 따라 잔고의 30~60% 범위에서 결정하세요 (단, 주식은 반드시 2주 이상 살 수 있는 금액으로 — 잔고의 50% 이상 권장)
   - 보유 종목 수 제한 없음 — 신호가 좋으면 여러 종목 동시 매수 가능
 - SELL: 하락/과매수 신호 또는 수익 실현 시. 보유 전량 매도합니다
 - HOLD: 명확한 신호가 없을 때
@@ -176,7 +178,7 @@ def analyze_and_decide(
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user_message},
         ],
-        max_tokens=4096,
+        max_tokens=8192,
         force_json=True,
     )
     if not text:
@@ -200,6 +202,48 @@ def analyze_and_decide(
             except json.JSONDecodeError:
                 pass
         return {"decisions": [], "market_summary": "AI 응답 파싱 실패", "error": True}
+
+
+GUIDE_SYSTEM_PROMPT = """당신은 경험 많은 기술적 분석 전문가입니다. 수동 투자자를 위한 실질적이고 구체적인 매매 가이드를 제공합니다.
+- 현재가 기준으로 구체적인 가격대를 제시하세요
+- 진입가·목표가·손절가는 숫자로 명확히 제시하세요
+- 핵심 신호는 3~4개로 요약하세요
+- 리스크를 반드시 언급하세요"""
+
+
+def generate_guide(summary: str, market_type: str, name: str = "") -> dict:
+    """수동 투자자를 위한 상세 매매 가이드 생성."""
+    market_label = "주식" if market_type == "stock" else "코인"
+    text = _chat(
+        [
+            {"role": "system", "content": GUIDE_SYSTEM_PROMPT},
+            {"role": "user", "content": f"""다음 {market_label} 기술적 지표를 분석하고 매매 가이드를 JSON으로 제공하세요.
+
+{summary}
+
+다음 JSON 형식으로만 응답하세요:
+{{
+  "action": "BUY 또는 SELL 또는 HOLD",
+  "confidence": 0.0~1.0,
+  "assessment": "현재 상황 종합 평가 (2~3문장)",
+  "entry": "진입 가격대 (예: 65,000~65,500원, BUY일 때만)",
+  "target": "목표가 (예: 69,000원, BUY일 때만)",
+  "stop_loss": "손절가 (예: 62,000원, BUY일 때만)",
+  "key_signals": ["신호1", "신호2", "신호3"],
+  "support_levels": ["지지선 가격1", "지지선 가격2"],
+  "resistance_levels": ["저항선 가격1", "저항선 가격2"],
+  "risk_note": "주요 리스크 또는 주의사항"
+}}"""},
+        ],
+        max_tokens=4096,
+        force_json=True,
+    )
+    if not text:
+        return {"action": "HOLD", "confidence": 0, "assessment": "AI 분석 실패", "risk_note": ""}
+    try:
+        return json.loads(_extract_json(text))
+    except (json.JSONDecodeError, ValueError):
+        return {"action": "HOLD", "confidence": 0, "assessment": text[:300] if text else "파싱 실패", "risk_note": ""}
 
 
 def quick_screen(tickers: list[dict], market_type: str = "stock") -> list[dict]:

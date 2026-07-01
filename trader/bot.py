@@ -2,8 +2,6 @@
 import asyncio
 import logging
 from datetime import datetime
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.schedulers.base import SchedulerAlreadyRunningError
 from config import config
 from trader import kis_client, upbit_client, analyzer, ai_engine, executor, watchlist
 
@@ -19,6 +17,10 @@ _state = {
     "errors": [],
     "activity_log": [],
 }
+
+# 잔고 조회 실패 시 폴백할 직전 성공 값
+_last_stock_portfolio: dict = {"cash": 0, "holdings": []}
+_last_crypto_portfolio: dict = {"cash": 0, "holdings": []}
 
 
 def get_state() -> dict:
@@ -47,18 +49,24 @@ async def run_cycle():
         # 1. 포트폴리오 조회 (병렬)
         _log("잔고 조회 중...")
         async def _get_stock_portfolio():
+            global _last_stock_portfolio
             try:
-                return await asyncio.to_thread(kis_client.get_balance) if config.is_kis_ready else {"cash": 0, "holdings": []}
+                result = await asyncio.to_thread(kis_client.get_balance) if config.is_kis_ready else {"cash": 0, "holdings": []}
+                _last_stock_portfolio = result
+                return result
             except Exception as e:
-                _log(f"주식 잔고 조회 실패 (분석 계속): {e}", "warning")
-                return {"cash": 0, "holdings": []}
+                _log(f"주식 잔고 조회 실패 — 직전 값 사용 (cash={_last_stock_portfolio.get('cash',0):,.0f}원): {e}", "warning")
+                return _last_stock_portfolio
 
         async def _get_crypto_portfolio():
+            global _last_crypto_portfolio
             try:
-                return await asyncio.to_thread(upbit_client.get_balance) if config.is_upbit_ready else {"cash": 0, "holdings": []}
+                result = await asyncio.to_thread(upbit_client.get_balance) if config.is_upbit_ready else {"cash": 0, "holdings": []}
+                _last_crypto_portfolio = result
+                return result
             except Exception as e:
-                _log(f"코인 잔고 조회 실패 (분석 계속): {e}", "warning")
-                return {"cash": 0, "holdings": []}
+                _log(f"코인 잔고 조회 실패 — 직전 값 사용: {e}", "warning")
+                return _last_crypto_portfolio
 
         stock_portfolio, crypto_portfolio = await asyncio.gather(
             _get_stock_portfolio(), _get_crypto_portfolio()
@@ -76,20 +84,24 @@ async def run_cycle():
 
         if config.is_kis_ready:
             held_codes = {h["code"] for h in stock_holdings}
-            _log("거래대금 상위 종목 조회 중...")
-            dynamic = await asyncio.to_thread(kis_client.get_dynamic_stocks, None, 40)
+            _log(f"거래대금 상위 저가주 스캔 중 (예산 {stock_cash:,.0f}원 이하)...")
+            dynamic = await asyncio.to_thread(kis_client.get_dynamic_stocks, stock_cash, 40)
             if dynamic:
                 source = "거래대금 상위"
-                universe = [s for s in dynamic if s["code"] not in held_codes]
+                # 채권·구조화상품(알파벳 포함) 및 ETF 브랜드명 제외
+                _ETF_PREFIXES = ("KODEX", "TIGER", "KINDEX", "SOL", "ACE", "RISE", "HANARO", "ARIRANG", "KOSEF")
+                universe = [
+                    s for s in dynamic
+                    if s["code"] not in held_codes
+                    and len(s["code"]) == 6 and s["code"].isdigit()
+                    and not s.get("name", "").startswith(_ETF_PREFIXES)
+                ]
             else:
                 source = "관심종목(폴백)"
                 universe = [s for s in watchlist.get_stocks() if s["code"] not in held_codes]
-            top_universe = universe[:40]
-            _log(f"[{source}] {len(top_universe)}개 종목 AI 1차 스크리닝 중...")
-            screened = await asyncio.to_thread(ai_engine.quick_screen, top_universe, "stock")
-            stock_candidates = list(stock_holdings) + screened
-            stock_candidates = stock_candidates[:config.STOCK_ANALYSIS_LIMIT]
-            _log(f"주식 분석 대상 확정: {len(stock_candidates)}개")
+            # quick_screen 없이 거래대금 상위 직접 사용 (API가 이미 볼륨순 정렬)
+            stock_candidates = list(stock_holdings) + universe[:config.STOCK_ANALYSIS_LIMIT]
+            _log(f"[{source}] 주식 분석 대상 확정: {len(stock_candidates)}개")
 
         if config.is_upbit_ready:
             held_tickers = {h["ticker"] for h in crypto_holdings}
@@ -105,23 +117,38 @@ async def run_cycle():
         # 3. 기술적 지표 계산 (병렬)
         _log("기술적 지표 계산 중...")
 
-        async def _stock_summary(s):
+        def _stock_summary_sync(s):
             code = s.get("code", s.get("ticker", ""))
             name = s.get("name", code)
-            try:
-                df = await asyncio.to_thread(kis_client.get_ohlcv, code)
-                indicators = analyzer.compute_indicators(df)
-                return analyzer.summarize_for_ai(name, indicators, "stock")
-            except Exception as e:
-                _log(f"주식 지표 계산 실패 {code}: {e}", "warning")
-                return None
+            df = kis_client.get_ohlcv(code)
+            indicators = analyzer.compute_indicators(df)
+            text = analyzer.summarize_for_ai(name, indicators, "stock")
+            price = indicators.get("current_price", 0) if indicators else 0
+            return text, price
+
+        def _crypto_summary_sync(c):
+            ticker = c.get("ticker", "")
+            df = upbit_client.get_ohlcv(ticker)
+            indicators = analyzer.compute_indicators(df)
+            return analyzer.summarize_for_ai(ticker, indicators, "crypto")
+
+        _kis_sem = asyncio.Semaphore(3)  # KIS API 동시 호출 3개로 제한
+
+        async def _stock_summary(s):
+            code = s.get("code", s.get("ticker", ""))
+            is_holding = code in held_codes
+            async with _kis_sem:
+                try:
+                    text, price = await asyncio.to_thread(_stock_summary_sync, s)
+                    return text, price, is_holding
+                except Exception as e:
+                    _log(f"주식 지표 계산 실패 {code}: {e}", "warning")
+                    return None, 0, is_holding
 
         async def _crypto_summary(c):
             ticker = c.get("ticker", "")
             try:
-                df = await asyncio.to_thread(upbit_client.get_ohlcv, ticker)
-                indicators = analyzer.compute_indicators(df)
-                return analyzer.summarize_for_ai(ticker, indicators, "crypto")
+                return await asyncio.to_thread(_crypto_summary_sync, c)
             except Exception as e:
                 _log(f"코인 지표 계산 실패 {ticker}: {e}", "warning")
                 return None
@@ -130,7 +157,15 @@ async def run_cycle():
             asyncio.gather(*[_stock_summary(s) for s in stock_candidates]),
             asyncio.gather(*[_crypto_summary(c) for c in crypto_candidates]),
         )
-        stock_summaries = [r for r in stock_results if r]
+        # 주식은 1주 단위 매수 → 현재가 > 잔고면 살 수 없으므로 AI에 넘기기 전 필터링
+        # 보유 종목(is_holding=True)은 SELL 판단을 위해 가격 무관 항상 포함
+        raw_stock = [(text, price, is_holding) for text, price, is_holding in stock_results if text]
+        unaffordable = [text.split("\n")[0] for text, price, is_holding in raw_stock
+                        if price > stock_cash > 0 and not is_holding]
+        if unaffordable:
+            _log(f"예산 초과 주식 제외 ({stock_cash:,.0f}원): {', '.join(unaffordable)}")
+        stock_summaries = [text for text, price, is_holding in raw_stock
+                           if is_holding or price <= stock_cash or stock_cash <= 0]
         crypto_summaries = [r for r in crypto_results if r]
         _log(f"지표 계산 완료 — 주식 {len(stock_summaries)}개, 코인 {len(crypto_summaries)}개")
 
@@ -199,36 +234,37 @@ async def run_cycle():
         _state["errors"].append(str(e))
 
 
-scheduler = AsyncIOScheduler()
+_cycle_task: asyncio.Task | None = None
+
+
+async def _cycle_loop():
+    """5분 주기 사이클 루프 — APScheduler 없이 asyncio.sleep 사용."""
+    while _state["running"]:
+        await run_cycle()
+        if not _state["running"]:
+            break
+        await asyncio.sleep(config.TRADE_INTERVAL_MINUTES * 60)
 
 
 async def start_bot():
     """봇 시작"""
+    global _cycle_task
     _state["running"] = True
     _state["errors"] = []
-    scheduler.add_job(
-        run_cycle,
-        "interval",
-        minutes=config.TRADE_INTERVAL_MINUTES,
-        id="trade_cycle",
-        replace_existing=True,
-    )
-    try:
-        scheduler.start()
-    except SchedulerAlreadyRunningError:
-        pass
-    asyncio.create_task(run_cycle())
+    _cycle_task = asyncio.create_task(_cycle_loop())
     _log(f"봇 시작 — {config.TRADE_INTERVAL_MINUTES}분 주기로 자동 매매")
 
 
 async def stop_bot():
     """봇 정지"""
+    global _cycle_task
     _state["running"] = False
-    try:
-        if scheduler.running:
-            scheduler.remove_job("trade_cycle")
-    except Exception:
-        pass
+    if _cycle_task and not _cycle_task.done():
+        _cycle_task.cancel()
+        try:
+            await _cycle_task
+        except asyncio.CancelledError:
+            pass
     _log("봇 정지")
 
 

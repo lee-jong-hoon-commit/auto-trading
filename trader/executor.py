@@ -41,26 +41,14 @@ def execute_stock(code: str, name: str, action: str, confidence: float, reason: 
             return {"status": "skipped", "reason": f"현재가 조회 실패 ({code})"}
 
         if action == "BUY":
-            # AI가 지정한 금액 사용, 없으면 잔고의 20% (최소 거래 단위 확보)
-            budget = float(amount_krw) if amount_krw else cash * 0.2
+            # AI가 지정한 금액 사용, 없으면 잔고의 50%; 최소 잔고 30% 보장
+            budget = float(amount_krw) if amount_krw else cash * 0.5
+            budget = max(budget, cash * 0.3)  # AI 소액 지정 시 최소 30%로 보정
             budget = min(budget, cash * 0.8)  # 최대 잔고 80% 안전 제한
             qty = int(budget // current_price)
             if qty < 1:
                 return {"status": "skipped", "reason": f"예산 부족 ({budget:,.0f}원으로 {current_price:,.0f}원짜리 매수 불가)"}
             result = kis_client.place_order(code, qty, int(current_price), "buy")
-            record = {
-                "time": datetime.now().isoformat(),
-                "market": "stock",
-                "code": code,
-                "name": name,
-                "action": "BUY",
-                "price": current_price,
-                "qty": qty,
-                "amount": current_price * qty,
-                "confidence": confidence,
-                "reason": reason,
-                "result": result,
-            }
 
         elif action == "SELL":
             holding = next((h for h in portfolio.get("holdings", []) if h["code"] == code), None)
@@ -68,26 +56,41 @@ def execute_stock(code: str, name: str, action: str, confidence: float, reason: 
                 return {"status": "skipped", "reason": "보유 종목 없음"}
             qty = holding["qty"]
             result = kis_client.place_order(code, qty, int(current_price), "sell")
-            record = {
-                "time": datetime.now().isoformat(),
-                "market": "stock",
-                "code": code,
-                "name": name,
-                "action": "SELL",
-                "price": current_price,
-                "qty": qty,
-                "amount": current_price * qty,
-                "profit_rate": holding.get("profit_rate", 0),
-                "confidence": confidence,
-                "reason": reason,
-                "result": result,
-            }
+
         else:
             return {"status": "skipped", "reason": "알 수 없는 액션"}
 
+        # KIS 주문 결과 확인 — rt_cd != '0' 이면 서버 측 오류
+        kis_ok = str(result.get("rt_cd", "0")) == "0"
+        if not kis_ok:
+            err_msg = result.get("msg1") or result.get("msg_cd") or "KIS 주문 오류"
+            result["error"] = {"message": err_msg, "rt_cd": result.get("rt_cd")}
+
+        record = {
+            "time": datetime.now().isoformat(),
+            "market": "stock",
+            "code": code,
+            "name": name,
+            "action": action,
+            "price": current_price,
+            "qty": qty,
+            "amount": current_price * qty,
+            "confidence": confidence,
+            "reason": reason,
+            "result": result,
+        }
+        if action == "SELL":
+            holding = next((h for h in portfolio.get("holdings", []) if h["code"] == code), None)
+            if holding:
+                record["profit_rate"] = holding.get("profit_rate", 0)
+
         _save_trade(record)
-        logger.info(f"[STOCK] {action} {name}({code}) {qty}주 @ {current_price:,}원")
-        return {"status": "executed", **record}
+        if kis_ok:
+            logger.info(f"[STOCK] {action} {name}({code}) {qty}주 @ {current_price:,}원")
+            return {"status": "executed", **record}
+        else:
+            logger.error(f"[STOCK] 주문 실패 {name}({code}): {result.get('msg1')}")
+            return {"status": "error", "error": result.get("msg1", "KIS 주문 오류")}
 
     except Exception as e:
         logger.error(f"[STOCK] 주문 실패 {code}: {e}")

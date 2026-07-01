@@ -111,6 +111,14 @@
   .inp:focus { outline: none; border-color: #1f6feb; }
   .analyzing { opacity: .6; pointer-events: none; }
   .small { font-size: 11px; color: #8b949e; }
+
+  /* ── 자동완성 드롭다운 ── */
+  .ac-wrap { position: relative; }
+  .ac-drop { display:none; position:absolute; top:100%; left:0; min-width:240px; background:#1c2128; border:1px solid #30363d; border-top:none; border-radius:0 0 6px 6px; z-index:200; max-height:220px; overflow-y:auto; box-shadow:0 8px 24px rgba(0,0,0,.4); }
+  .ac-item { padding:8px 12px; cursor:pointer; font-size:13px; display:flex; justify-content:space-between; align-items:center; gap:8px; }
+  .ac-item:hover, .ac-item.active { background:#21262d; }
+  .ac-code { font-size:11px; color:#8b949e; font-family:monospace; }
+  .ac-price { font-size:11px; color:#58a6ff; white-space:nowrap; }
 </style>
 </head>
 <body>
@@ -133,7 +141,7 @@
   <button class="btn btn-green" onclick="startBot()">▶ 시작</button>
   <button class="btn btn-red"   onclick="stopBot()">■ 정지</button>
   <button class="btn btn-blue" id="analyze-btn" onclick="runAnalyze()">🤖 AI 분석</button>
-  <button class="btn btn-gray"  onclick="refreshAll()">↻</button>
+  <button class="btn btn-gray" id="refresh-btn" onclick="refreshAll()">↻ 새로고침</button>
   <div class="ctrl-sep"></div>
   <div class="stat-pill"><span class="stat-label">주식</span><span class="stat-val" id="stock-cash">-</span></div>
   <div class="stat-pill"><span class="stat-label">코인</span><span class="stat-val" id="crypto-cash">-</span></div>
@@ -148,6 +156,7 @@
   <div class="tab" onclick="switchTab('portfolio')">💼 포트폴리오</div>
   <div class="tab" onclick="switchTab('trades')">📋 거래내역 <span class="tab-cnt" id="trades-cnt">0</span></div>
   <div class="tab" onclick="switchTab('watchlist')">⭐ 관심종목</div>
+  <div class="tab" onclick="switchTab('guide')">🔍 매매 가이드</div>
   <div class="tab" onclick="switchTab('logs')">🖥 로그</div>
 </div>
 
@@ -214,6 +223,40 @@
     </div>
   </div>
 
+  <!-- 매매 가이드 탭 -->
+  <div class="panel" id="panel-guide">
+    <div class="card" style="padding:14px 18px">
+      <div style="display:flex;gap:8px;align-items:center">
+        <div class="ac-wrap" style="flex:1">
+          <input id="guide-search" class="inp" placeholder="종목명 또는 코인 검색 (삼성전자, BTC, 이더리움...)"
+                 style="width:100%;box-sizing:border-box"
+                 autocomplete="off" spellcheck="false"
+                 oninput="onGuideInput(this.value)"
+                 onkeydown="onGuideKey(event)"
+                 onblur="setTimeout(closeGuideDrop,200)">
+          <div id="guide-drop" class="ac-drop"></div>
+        </div>
+        <button class="btn btn-blue" id="guide-btn" onclick="requestGuide()">🔍 분석</button>
+      </div>
+      <input type="hidden" id="guide-code">
+      <input type="hidden" id="guide-name">
+      <input type="hidden" id="guide-ticker">
+      <div style="margin-top:10px;display:flex;flex-wrap:wrap;gap:5px">
+        <button class="btn btn-gray" style="padding:3px 9px;font-size:11px" onclick="quickGuide('005930','삼성전자')">삼성전자</button>
+        <button class="btn btn-gray" style="padding:3px 9px;font-size:11px" onclick="quickGuide('000660','SK하이닉스')">SK하이닉스</button>
+        <button class="btn btn-gray" style="padding:3px 9px;font-size:11px" onclick="quickGuide('035420','네이버')">네이버</button>
+        <button class="btn btn-gray" style="padding:3px 9px;font-size:11px" onclick="quickGuide('035720','카카오')">카카오</button>
+        <button class="btn btn-gray" style="padding:3px 9px;font-size:11px" onclick="quickGuide('015760','한국전력')">한국전력</button>
+        <span style="color:#30363d;margin:0 2px">│</span>
+        <button class="btn btn-gray" style="padding:3px 9px;font-size:11px" onclick="quickGuideTicker('KRW-BTC')">비트코인</button>
+        <button class="btn btn-gray" style="padding:3px 9px;font-size:11px" onclick="quickGuideTicker('KRW-ETH')">이더리움</button>
+        <button class="btn btn-gray" style="padding:3px 9px;font-size:11px" onclick="quickGuideTicker('KRW-XRP')">리플</button>
+        <button class="btn btn-gray" style="padding:3px 9px;font-size:11px" onclick="quickGuideTicker('KRW-SOL')">솔라나</button>
+      </div>
+    </div>
+    <div id="guide-result"><div class="empty">종목명이나 코인을 검색해 AI 매매 가이드를 받으세요</div></div>
+  </div>
+
   <!-- 로그 탭 -->
   <div class="panel" id="panel-logs">
     <div id="logs-area" data-placeholder="true">대기 중...</div>
@@ -223,7 +266,7 @@
 
 <script>
 // ───────────────────── 탭 ─────────────────────
-const TAB_IDS = ['analysis','portfolio','trades','watchlist','logs'];
+const TAB_IDS = ['analysis','portfolio','trades','watchlist','guide','logs'];
 function switchTab(name) {
   document.querySelectorAll('.tab').forEach((t, i) => t.classList.toggle('active', TAB_IDS[i] === name));
   document.querySelectorAll('.panel').forEach(p => p.classList.toggle('active', p.id === 'panel-' + name));
@@ -436,7 +479,8 @@ function renderTrades(trades) {
       <th>가격</th><th>금액</th><th>결과</th>
     </tr></thead>
     <tbody>${trades.map(t => {
-      const ok  = !t.result?.error;
+      const kisOk = t.result?.rt_cd == null || String(t.result?.rt_cd) === '0';
+      const ok  = !t.result?.error && kisOk;
       const lbl = t.action === 'BUY' ? '매수' : '매도';
       const name = t.name || t.currency || t.ticker;
       const amt  = t.amount || t.amount_krw || (t.price * t.qty) || 0;
@@ -450,7 +494,7 @@ function renderTrades(trades) {
         <td><span style="color:${aColor};font-weight:600">${lbl}</span></td>
         <td style="white-space:nowrap">${fmt(t.price)}</td>
         <td style="white-space:nowrap">${fmt(Math.round(amt))}</td>
-        <td class="small" style="white-space:nowrap;color:${ok ? '#3fb950' : '#f85149'}">${ok ? '✓ 성공' : '✗ ' + (t.result?.error?.message || t.result?.error?.name || '실패')}</td>
+        <td class="small" style="white-space:nowrap;color:${ok ? '#3fb950' : '#f85149'}">${ok ? '✓ 성공' : '✗ ' + (t.result?.error?.message || t.result?.msg1 || t.result?.error?.name || '실패')}</td>
       </tr>`;
     }).join('')}</tbody>
   </table>`;
@@ -485,11 +529,14 @@ function connectStream() {
       updateBotButtons(data.running);
       if (data.last_run) setLastUpdate(data.last_run);
 
-      const stock  = data.portfolio?.stock  || {};
-      const crypto = data.portfolio?.crypto || {};
-      if (stock.cash  != null) document.getElementById('stock-cash').textContent  = fmt(stock.cash);
-      if (crypto.cash != null) document.getElementById('crypto-cash').textContent = fmt(crypto.cash);
-      renderHoldings(stock, crypto);
+      // 수동 새로고침 후 15초간 SSE 포트폴리오 덮어쓰기 방지
+      if (Date.now() - _manualRefreshAt > 15000) {
+        const stock  = data.portfolio?.stock  || {};
+        const crypto = data.portfolio?.crypto || {};
+        if (stock.cash  != null) document.getElementById('stock-cash').textContent  = fmt(stock.cash);
+        if (crypto.cash != null) document.getElementById('crypto-cash').textContent = fmt(crypto.cash);
+        renderHoldings(stock, crypto);
+      }
 
       if (data.trades) renderTrades(data.trades);
       if (data.decisions?.length) renderDecisions(data.decisions, data.market_summary, data.last_run, data.summaries);
@@ -572,17 +619,238 @@ async function removeTicker(ticker) {
   await loadWatchlist();
 }
 
+// ───────────────────── 매매 가이드 ─────────────────────
+const GUIDE_COINS = [
+  {ticker:'KRW-BTC',  name:'비트코인',  keys:['btc','비트코인','bitcoin']},
+  {ticker:'KRW-ETH',  name:'이더리움',  keys:['eth','이더리움','ethereum']},
+  {ticker:'KRW-XRP',  name:'리플',      keys:['xrp','리플','ripple']},
+  {ticker:'KRW-SOL',  name:'솔라나',    keys:['sol','솔라나','solana']},
+  {ticker:'KRW-DOGE', name:'도지코인',  keys:['doge','도지','dogecoin']},
+  {ticker:'KRW-ADA',  name:'에이다',    keys:['ada','에이다','cardano']},
+  {ticker:'KRW-AVAX', name:'아발란체',  keys:['avax','아발란체','avalanche']},
+  {ticker:'KRW-MATIC',name:'폴리곤',    keys:['matic','폴리곤','polygon']},
+  {ticker:'KRW-DOT',  name:'폴카닷',    keys:['dot','폴카닷','polkadot']},
+  {ticker:'KRW-LINK', name:'체인링크',  keys:['link','체인링크','chainlink']},
+];
+
+let _gTimer=null, _gIdx=-1, _gItems=[];
+
+function onGuideInput(val) {
+  clearTimeout(_gTimer);
+  _gIdx = -1; _gItems = [];
+  if (!val.trim()) { closeGuideDrop(); return; }
+  _gTimer = setTimeout(() => fetchGuideDrop(val.trim()), 220);
+}
+
+async function fetchGuideDrop(q) {
+  const ql = q.toLowerCase().replace(/krw-/i,'');
+  const results = [];
+  // 코인 매칭
+  for (const c of GUIDE_COINS) {
+    if (c.keys.some(k => k.includes(ql) || ql.includes(k)) || c.name.includes(q) || c.ticker.toLowerCase().includes(ql)) {
+      results.push({type:'coin', ticker:c.ticker, name:c.name});
+    }
+  }
+  // 주식 검색
+  try {
+    const stocks = await (await fetch('/api/stocks/search?q='+encodeURIComponent(q))).json();
+    for (const s of stocks) results.push({type:'stock', code:s.code, name:s.name, price:s.price});
+  } catch(e) {}
+
+  _gItems = results;
+  const drop = document.getElementById('guide-drop');
+  if (!results.length) { closeGuideDrop(); return; }
+  drop.innerHTML = results.map((r,i) => {
+    const icon = r.type==='coin' ? '🪙' : '📈';
+    const sub  = r.type==='coin' ? r.ticker : r.code;
+    const priceStr = r.price ? `<span class="ac-price">${Number(r.price).toLocaleString('ko-KR')}원</span>` : '';
+    return `<div class="ac-item" data-i="${i}" onmousedown="selectGuideItem(${i})">
+      <span>${icon} ${r.name}</span>
+      <span style="display:flex;gap:8px">${priceStr}<span class="ac-code">${sub}</span></span>
+    </div>`;
+  }).join('');
+  drop.style.display = 'block';
+}
+
+function selectGuideItem(idx) {
+  const r = _gItems[idx];
+  if (!r) return;
+  document.getElementById('guide-search').value = r.name;
+  if (r.type === 'coin') {
+    document.getElementById('guide-ticker').value = r.ticker;
+    document.getElementById('guide-code').value = '';
+    document.getElementById('guide-name').value = '';
+  } else {
+    document.getElementById('guide-code').value = r.code;
+    document.getElementById('guide-name').value = r.name;
+    document.getElementById('guide-ticker').value = '';
+  }
+  closeGuideDrop();
+}
+
+function onGuideKey(e) {
+  const drop = document.getElementById('guide-drop');
+  const items = drop.querySelectorAll('.ac-item');
+  if (!items.length) { if (e.key==='Enter') requestGuide(); return; }
+  if (e.key==='ArrowDown') { e.preventDefault(); _setGIdx((_gIdx+1)%items.length, items); }
+  else if (e.key==='ArrowUp') { e.preventDefault(); _setGIdx((_gIdx-1+items.length)%items.length, items); }
+  else if (e.key==='Enter') { if (_gIdx>=0){ e.preventDefault(); selectGuideItem(_gIdx); } else requestGuide(); }
+  else if (e.key==='Escape') closeGuideDrop();
+}
+
+function _setGIdx(idx, items) {
+  items.forEach((el,i) => el.classList.toggle('active', i===idx));
+  _gIdx = idx;
+}
+
+function closeGuideDrop() {
+  const drop = document.getElementById('guide-drop');
+  if (drop) { drop.style.display='none'; _gIdx=-1; }
+}
+
+async function requestGuide() {
+  const code   = document.getElementById('guide-code').value.trim();
+  const name   = document.getElementById('guide-name').value.trim();
+  const ticker = document.getElementById('guide-ticker').value.trim();
+  if (!code && !ticker) {
+    document.getElementById('guide-result').innerHTML = '<div class="empty" style="color:#f85149">종목이나 코인을 선택하세요</div>';
+    return;
+  }
+  const btn = document.getElementById('guide-btn');
+  btn.innerHTML = '<span class="spinner"></span>분석 중...';
+  btn.disabled = true;
+  document.getElementById('guide-result').innerHTML = '<div class="empty">AI가 분석 중입니다...</div>';
+  try {
+    const payload = code ? {code, name} : {ticker};
+    const r = await (await fetch('/api/guide', {
+      method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload),
+    })).json();
+    if (!r.ok) {
+      document.getElementById('guide-result').innerHTML = `<div class="empty" style="color:#f85149">오류: ${r.error}</div>`;
+      return;
+    }
+    renderGuide(r);
+  } catch(e) {
+    document.getElementById('guide-result').innerHTML = `<div class="empty" style="color:#f85149">오류: ${e}</div>`;
+  } finally {
+    btn.innerHTML = '🔍 분석';
+    btn.disabled = false;
+  }
+}
+
+function quickGuide(code, name) {
+  document.getElementById('guide-search').value = name;
+  document.getElementById('guide-code').value = code;
+  document.getElementById('guide-name').value = name;
+  document.getElementById('guide-ticker').value = '';
+  switchTab('guide');
+  requestGuide();
+}
+
+function quickGuideTicker(ticker) {
+  const coin = GUIDE_COINS.find(c => c.ticker===ticker);
+  document.getElementById('guide-search').value = coin ? coin.name : ticker;
+  document.getElementById('guide-ticker').value = ticker;
+  document.getElementById('guide-code').value = '';
+  document.getElementById('guide-name').value = '';
+  switchTab('guide');
+  requestGuide();
+}
+
+function renderGuide(r) {
+  const g = r.guide || {};
+  const action = (g.action || 'HOLD').toUpperCase();
+  const conf   = Math.round((g.confidence || 0) * 100);
+  const isBuy  = action === 'BUY', isSell = action === 'SELL';
+  const color  = isBuy ? '#3fb950' : isSell ? '#f85149' : '#8b949e';
+  const label  = isBuy ? '매수' : isSell ? '매도' : '관망';
+  const dname  = r.name || r.ticker || r.code || '-';
+  const price  = r.current_price ? Number(r.current_price).toLocaleString('ko-KR') + '원' : '-';
+
+  const signals = (g.key_signals || []).map(s =>
+    `<div style="padding:3px 0;font-size:13px;color:#c9d1d9">• ${s}</div>`).join('');
+
+  const supports    = (g.support_levels    || []).map(s => `<div class="green" style="font-size:12px;padding:2px 0">▲ ${s}</div>`).join('');
+  const resistances = (g.resistance_levels || []).map(s => `<div class="red"   style="font-size:12px;padding:2px 0">▼ ${s}</div>`).join('');
+
+  const tradeZone = (isBuy && (g.entry || g.target || g.stop_loss)) ? `
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:1px;background:#21262d;border-radius:6px;overflow:hidden;margin:14px 0">
+      <div style="background:#161b22;padding:10px 12px;text-align:center">
+        <div class="small" style="margin-bottom:4px">진입 가격대</div>
+        <div style="font-weight:600;color:#58a6ff;font-size:13px">${g.entry || '-'}</div>
+      </div>
+      <div style="background:#161b22;padding:10px 12px;text-align:center">
+        <div class="small" style="margin-bottom:4px">목표가</div>
+        <div style="font-weight:600;color:#3fb950;font-size:13px">${g.target || '-'}</div>
+      </div>
+      <div style="background:#161b22;padding:10px 12px;text-align:center">
+        <div class="small" style="margin-bottom:4px">손절가</div>
+        <div style="font-weight:600;color:#f85149;font-size:13px">${g.stop_loss || '-'}</div>
+      </div>
+    </div>` : '';
+
+  const summaryHtml = r.summary ? `
+    <div style="margin-top:14px">
+      <div class="small" style="cursor:pointer;user-select:none;padding:4px 0" onclick="const c=this.nextElementSibling;const open=c.style.display==='none';c.style.display=open?'block':'none';this.querySelector('span').textContent=open?'▼':'▶'">
+        <span>▶</span> 기술 지표 원문 (AI에게 전달된 데이터)
+      </div>
+      <div style="display:none;margin-top:6px"><div class="sum-block">${r.summary}</div></div>
+    </div>` : '';
+
+  document.getElementById('guide-result').innerHTML = `
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+        <div>
+          <div style="font-size:18px;font-weight:700">${dname}</div>
+          <div class="small" style="margin-top:3px">현재가 <span style="color:#e6edf3;font-weight:600">${price}</span></div>
+        </div>
+        <div style="text-align:right">
+          <span class="badge" style="background:${color}22;color:${color};font-size:14px;padding:6px 18px">${label}</span>
+          <div class="small" style="margin-top:5px">신뢰도 <span style="color:${color};font-weight:600">${conf}%</span></div>
+        </div>
+      </div>
+      <div class="conf-bar"><div class="conf-fill" style="width:${conf}%;background:${color}"></div></div>
+
+      ${g.assessment ? `<div style="background:#1c2128;border-radius:6px;padding:12px 14px;margin:14px 0;font-size:13px;line-height:1.8;color:#c9d1d9">${g.assessment}</div>` : ''}
+
+      ${tradeZone}
+
+      ${signals ? `<div style="margin:14px 0"><div class="small" style="margin-bottom:8px">📊 핵심 신호</div>${signals}</div>` : ''}
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:14px 0">
+        <div style="background:#0d1117;border-radius:6px;padding:10px 12px">
+          <div class="small" style="margin-bottom:6px">지지선</div>
+          ${supports || '<div class="gray small">정보 없음</div>'}
+        </div>
+        <div style="background:#0d1117;border-radius:6px;padding:10px 12px">
+          <div class="small" style="margin-bottom:6px">저항선</div>
+          ${resistances || '<div class="gray small">정보 없음</div>'}
+        </div>
+      </div>
+
+      ${g.risk_note ? `<div style="background:#2d1f00;border:1px solid #6a3d00;border-radius:6px;padding:10px 13px;font-size:12px;color:#d29922;line-height:1.6">⚠ ${g.risk_note}</div>` : ''}
+
+      ${summaryHtml}
+    </div>`;
+}
+
 // ───────────────────── 새로고침 ─────────────────────
+let _manualRefreshAt = 0; // 수동 새로고침 시각 (SSE 덮어쓰기 방지용)
+
 async function refreshAll() {
+  const btn = document.getElementById('refresh-btn');
+  if (btn) { btn.innerHTML = '<span class="spinner"></span>갱신 중...'; btn.disabled = true; }
   try { await refreshStatus(); } catch (e) {}
   try {
     const p = await api('/api/portfolio');
+    _manualRefreshAt = Date.now();
     const s = p.stock || {}, c = p.crypto || {};
-    if (s.cash != null) document.getElementById('stock-cash').textContent = fmt(s.cash);
-    if (c.cash != null) document.getElementById('crypto-cash').textContent = fmt(c.cash);
+    if (s.cash  != null) document.getElementById('stock-cash').textContent  = fmt(s.cash);
+    if (c.cash  != null) document.getElementById('crypto-cash').textContent = fmt(c.cash);
     renderHoldings(s, c);
   } catch (e) {}
   try { renderTrades(await api('/api/trades?limit=20')); } catch (e) {}
+  if (btn) { btn.innerHTML = '↻ 새로고침'; btn.disabled = false; }
 }
 
 // ───────────────────── 초기화 ─────────────────────

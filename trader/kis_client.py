@@ -12,49 +12,142 @@ TOKEN_CACHE = Path(__file__).parent.parent / "data" / "kis_token.json"
 
 # 시가총액 순위 API 실패 시 사용할 기본 분석 종목.
 # 섹터/가격대를 다양화하여 잔고 규모에 맞는 종목을 폭넓게 탐색할 수 있게 한다.
+# 거래대금 상위 API 실패 시 폴백 — 100,000원 이하 저가주 위주로 구성
 DEFAULT_STOCKS = [
-    # 반도체
+    # 건설
+    {"code": "047040", "name": "대우건설"},
+    {"code": "006360", "name": "GS건설"},
+    {"code": "000720", "name": "현대건설"},
+    {"code": "028050", "name": "삼성E&A"},
+    # 철강/소재
+    {"code": "001440", "name": "대한전선"},
+    {"code": "006340", "name": "대원전선"},
+    {"code": "093370", "name": "후성"},
+    {"code": "011780", "name": "금호석유"},
+    # 에너지/전력
+    {"code": "015760", "name": "한국전력"},
+    {"code": "034730", "name": "SK"},
+    # 반도체/장비 저가
+    {"code": "089030", "name": "테크윙"},
+    {"code": "086520", "name": "에코프로"},
+    {"code": "475150", "name": "SK이터닉스"},
+    # 금융
+    {"code": "316140", "name": "우리금융지주"},
+    {"code": "086790", "name": "하나금융지주"},
+    {"code": "055550", "name": "신한지주"},
+    {"code": "105560", "name": "KB금융"},
+    # 통신/유통
+    {"code": "017670", "name": "SK텔레콤"},
+    {"code": "030200", "name": "KT"},
+    {"code": "282330", "name": "BGF리테일"},
+    # 바이오/제약 저가
+    {"code": "000100", "name": "유한양행"},
+    {"code": "068270", "name": "셀트리온"},
+    # 항공/물류
+    {"code": "003490", "name": "대한항공"},
+    {"code": "020560", "name": "아시아나항공"},
+    # 게임/엔터
+    {"code": "035720", "name": "카카오"},
+
+    {"code": "036570", "name": "엔씨소프트"},
+]
+
+# 종목명 검색에 사용하는 확장 리스트 (주요 KOSPI/KOSDAQ 종목)
+SEARCH_STOCKS: list[dict] = [
+    # 반도체/IT
     {"code": "005930", "name": "삼성전자"},
     {"code": "000660", "name": "SK하이닉스"},
-    {"code": "042700", "name": "한미반도체"},
+    {"code": "066570", "name": "LG전자"},
+    {"code": "009150", "name": "삼성전기"},
+    {"code": "011070", "name": "LG이노텍"},
+    {"code": "006400", "name": "삼성SDI"},
+    {"code": "373220", "name": "LG에너지솔루션"},
+    {"code": "247540", "name": "에코프로비엠"},
+    {"code": "086520", "name": "에코프로"},
+    {"code": "003670", "name": "포스코퓨처엠"},
+    {"code": "475150", "name": "SK이터닉스"},
+    {"code": "089030", "name": "테크윙"},
     # 자동차
     {"code": "005380", "name": "현대차"},
     {"code": "000270", "name": "기아"},
     {"code": "012330", "name": "현대모비스"},
-    # 2차전지/화학
-    {"code": "373220", "name": "LG에너지솔루션"},
-    {"code": "006400", "name": "삼성SDI"},
-    {"code": "051910", "name": "LG화학"},
-    {"code": "011170", "name": "롯데케미칼"},
-    # 인터넷/게임/엔터
-    {"code": "035420", "name": "NAVER"},
+    {"code": "086280", "name": "현대글로비스"},
+    {"code": "011210", "name": "현대위아"},
+    # 인터넷/플랫폼
+    {"code": "035420", "name": "네이버"},
     {"code": "035720", "name": "카카오"},
-    {"code": "036570", "name": "엔씨소프트"},
-    {"code": "352820", "name": "하이브"},
-    # 바이오/제약
-    {"code": "207940", "name": "삼성바이오로직스"},
-    {"code": "068270", "name": "셀트리온"},
-    {"code": "000100", "name": "유한양행"},
-    {"code": "128940", "name": "한미약품"},
+    {"code": "323410", "name": "카카오뱅크"},
+    {"code": "293490", "name": "카카오페이"},
     # 금융
     {"code": "105560", "name": "KB금융"},
     {"code": "055550", "name": "신한지주"},
     {"code": "086790", "name": "하나금융지주"},
     {"code": "316140", "name": "우리금융지주"},
-    # 철강/소재/조선
-    {"code": "005490", "name": "POSCO홀딩스"},
-    {"code": "010130", "name": "고려아연"},
-    {"code": "009540", "name": "HD한국조선해양"},
-    {"code": "042660", "name": "한화오션"},
-    # 방산/항공
-    {"code": "012450", "name": "한화에어로스페이스"},
-    {"code": "047810", "name": "한국항공우주"},
-    # 소비/유통/통신/유틸리티
-    {"code": "097950", "name": "CJ제일제당"},
-    {"code": "282330", "name": "BGF리테일"},
+    {"code": "024110", "name": "기업은행"},
+    {"code": "005940", "name": "NH투자증권"},
+    {"code": "006800", "name": "미래에셋증권"},
+    {"code": "071050", "name": "한국금융지주"},
+    {"code": "030200", "name": "KT"},
+    # 통신
     {"code": "017670", "name": "SK텔레콤"},
+    {"code": "032640", "name": "LGU+"},
+    # 에너지/정유
+    {"code": "096770", "name": "SK이노베이션"},
+    {"code": "010950", "name": "S-Oil"},
     {"code": "015760", "name": "한국전력"},
+    {"code": "036460", "name": "한국가스공사"},
+    {"code": "034730", "name": "SK"},
+    # 화학/소재
+    {"code": "051910", "name": "LG화학"},
+    {"code": "011170", "name": "롯데케미칼"},
+    {"code": "011780", "name": "금호석유화학"},
+    {"code": "009830", "name": "한화솔루션"},
+    {"code": "093370", "name": "후성"},
+    {"code": "010060", "name": "OCI홀딩스"},
+    # 철강
+    {"code": "005490", "name": "POSCO홀딩스"},
+    {"code": "004020", "name": "현대제철"},
+    {"code": "001440", "name": "대한전선"},
+    {"code": "006340", "name": "대원전선"},
+    # 건설
+    {"code": "000720", "name": "현대건설"},
+    {"code": "006360", "name": "GS건설"},
+    {"code": "047040", "name": "대우건설"},
+    {"code": "028050", "name": "삼성E&A"},
+    # 조선/중공업
+    {"code": "009540", "name": "한국조선해양"},
+    {"code": "010140", "name": "삼성중공업"},
+    {"code": "329180", "name": "HD현대중공업"},
+    {"code": "034020", "name": "두산에너빌리티"},
+    {"code": "012450", "name": "한화에어로스페이스"},
+    # 유통/소비
+    {"code": "282330", "name": "BGF리테일"},
+    {"code": "007070", "name": "GS리테일"},
+    {"code": "023530", "name": "롯데쇼핑"},
+    {"code": "004170", "name": "신세계"},
+    {"code": "139480", "name": "이마트"},
+    {"code": "069960", "name": "현대백화점"},
+    # 바이오/제약
+    {"code": "207940", "name": "삼성바이오로직스"},
+    {"code": "068270", "name": "셀트리온"},
+    {"code": "000100", "name": "유한양행"},
+    {"code": "128940", "name": "한미약품"},
+    {"code": "326030", "name": "SK바이오팜"},
+    {"code": "145020", "name": "휴젤"},
+    # 항공/물류
+    {"code": "003490", "name": "대한항공"},
+    {"code": "020560", "name": "아시아나항공"},
+    {"code": "011200", "name": "HMM"},
+    {"code": "028670", "name": "팬오션"},
+    # 게임/엔터
+    {"code": "259960", "name": "크래프톤"},
+    {"code": "251270", "name": "넷마블"},
+    {"code": "036570", "name": "엔씨소프트"},
+    {"code": "293940", "name": "카카오게임즈"},
+    # 지주
     {"code": "003550", "name": "LG"},
+    {"code": "028260", "name": "삼성물산"},
+    {"code": "006260", "name": "LS"},
 ]
 
 
@@ -128,27 +221,33 @@ def _headers(tr_id: str) -> dict:
 
 
 def get_balance() -> dict:
-    """계좌 잔고 조회"""
+    """계좌 잔고 조회 (500 에러 시 최대 2회 재시도)"""
     acct, suffix = config.KIS_ACCOUNT_NO.split("-")
     tr_id = "VTTC8434R" if config.KIS_MOCK else "TTTC8434R"
-    resp = requests.get(
-        f"{config.KIS_BASE_URL}/uapi/domestic-stock/v1/trading/inquire-balance",
-        headers=_headers(tr_id),
-        params={
-            "CANO": acct,
-            "ACNT_PRDT_CD": suffix,
-            "AFHR_FLPR_YN": "N",
-            "OFL_YN": "",
-            "INQR_DVSN": "02",
-            "UNPR_DVSN": "01",
-            "FUND_STTL_ICLD_YN": "N",
-            "FNCG_AMT_AUTO_RDPT_YN": "N",
-            "PRCS_DVSN": "01",
-            "CTX_AREA_FK100": "",
-            "CTX_AREA_NK100": "",
-        },
-    )
-    resp.raise_for_status()
+    params = {
+        "CANO": acct,
+        "ACNT_PRDT_CD": suffix,
+        "AFHR_FLPR_YN": "N",
+        "OFL_YN": "",
+        "INQR_DVSN": "02",
+        "UNPR_DVSN": "01",
+        "FUND_STTL_ICLD_YN": "N",
+        "FNCG_AMT_AUTO_RDPT_YN": "N",
+        "PRCS_DVSN": "01",
+        "CTX_AREA_FK100": "",
+        "CTX_AREA_NK100": "",
+    }
+    for attempt in range(3):
+        resp = requests.get(
+            f"{config.KIS_BASE_URL}/uapi/domestic-stock/v1/trading/inquire-balance",
+            headers=_headers(tr_id),
+            params=params,
+        )
+        if resp.status_code == 500 and attempt < 2:
+            time.sleep(1)
+            continue
+        resp.raise_for_status()
+        break
     data = resp.json()
     return {
         "cash": int(data["output2"][0]["dnca_tot_amt"]) if data.get("output2") else 0,
@@ -169,22 +268,27 @@ def get_balance() -> dict:
 
 
 def get_ohlcv(code: str, days: int = 100) -> pd.DataFrame:
-    """주가 OHLCV 데이터 조회
+    """주가 OHLCV 데이터 조회 (500 에러 시 최대 2회 재시도)
 
     inquire-daily-price(FHKST01010400) 사용. 최근 약 30영업일치를 반환한다.
     (구 inquire-daily-chartprice 엔드포인트는 일부 계정에서 404를 반환하여 교체)
     """
-    resp = requests.get(
-        f"{config.KIS_BASE_URL}/uapi/domestic-stock/v1/quotations/inquire-daily-price",
-        headers=_headers("FHKST01010400"),
-        params={
-            "FID_COND_MRKT_DIV_CODE": "J",
-            "FID_INPUT_ISCD": code,
-            "FID_PERIOD_DIV_CODE": "D",   # D:일 W:주 M:월
-            "FID_ORG_ADJ_PRC": "0",       # 0:수정주가 1:원주가
-        },
-    )
-    resp.raise_for_status()
+    for attempt in range(3):
+        resp = requests.get(
+            f"{config.KIS_BASE_URL}/uapi/domestic-stock/v1/quotations/inquire-daily-price",
+            headers=_headers("FHKST01010400"),
+            params={
+                "FID_COND_MRKT_DIV_CODE": "J",
+                "FID_INPUT_ISCD": code,
+                "FID_PERIOD_DIV_CODE": "D",   # D:일 W:주 M:월
+                "FID_ORG_ADJ_PRC": "0",       # 0:수정주가 1:원주가
+            },
+        )
+        if resp.status_code == 500 and attempt < 2:
+            time.sleep(1)
+            continue
+        resp.raise_for_status()
+        break
     rows = resp.json().get("output", [])
     if not rows:
         return pd.DataFrame()
