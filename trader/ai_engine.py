@@ -193,14 +193,27 @@ def analyze_and_decide(
         result["decisions"] = _validate_decisions(result["decisions"], stock_summaries, crypto_summaries)
         return result
     except json.JSONDecodeError:
-        # 응답이 잘린 경우 decisions 배열까지만 추출 시도
-        match = re.search(r'"decisions"\s*:\s*(\[.*?\])', text, re.DOTALL)
-        if match:
+        logger.warning(f"AI JSON 파싱 실패, 부분 추출 시도. 응답 앞부분: {text[:200]}")
+        decisions = []
+        summary = ""
+
+        # decisions 배열 추출 — 탐욕적 매칭으로 중첩 괄호 대응
+        match_d = re.search(r'"decisions"\s*:\s*(\[.*\])', text, re.DOTALL)
+        if match_d:
             try:
-                return {"decisions": json.loads(match.group(1)),
-                        "market_summary": "응답 파싱 오류로 요약 생략"}
+                decisions = _validate_decisions(
+                    json.loads(match_d.group(1)), stock_summaries, crypto_summaries
+                )
             except json.JSONDecodeError:
                 pass
+
+        # market_summary 추출
+        match_s = re.search(r'"market_summary"\s*:\s*"(.*?)"(?:\s*[,}])', text, re.DOTALL)
+        if match_s:
+            summary = match_s.group(1).replace('\\n', '\n')
+
+        if decisions:
+            return {"decisions": decisions, "market_summary": summary or "시장 요약 추출 실패"}
         return {"decisions": [], "market_summary": "AI 응답 파싱 실패", "error": True}
 
 
