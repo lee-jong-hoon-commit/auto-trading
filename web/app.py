@@ -359,28 +359,39 @@ async def trades_pages(page: int = 1, per_page: int = 20):
 
 @app.get("/api/portfolio")
 async def portfolio():
+    realized = executor.get_realized_pl()
     if UI_ONLY:
         return {
-            "stock":  {"cash": 100002, "total": 135000, "holdings": [
-                {"code": "005930", "name": "삼성전자", "qty": 1, "avg_price": 72000.0, "current_price": 75000.0, "profit_rate": 4.17},
-                {"code": "035420", "name": "네이버",   "qty": 2, "avg_price": 180000.0,"current_price": 192000.0,"profit_rate": 6.67},
-            ]},
-            "crypto": {"cash": 12345, "total": 87600, "holdings": [
-                {"ticker": "KRW-BTC",  "qty": 0.0008, "avg_price": 87000000.0, "current_price": 91000000.0, "profit_rate": 4.60},
-                {"ticker": "KRW-ETH",  "qty": 0.012,  "avg_price": 3200000.0,  "current_price": 3450000.0,  "profit_rate": 7.81},
-                {"ticker": "KRW-SOL",  "qty": 0.45,   "avg_price": 110000.0,   "current_price": 115000.0,   "profit_rate": 4.55},
-            ]},
+            "stock": {
+                "cash": 100002, "settlement_cash": 85000,
+                "total": 519002, "unrealized_pl": 18400,
+                "holdings": [
+                    {"code": "005930", "name": "삼성전자", "qty": 1, "avg_price": 72000.0,
+                     "current_price": 75000.0, "eval_amount": 75000, "pl_amount": 3000, "profit_rate": 4.17},
+                    {"code": "035420", "name": "네이버",   "qty": 2, "avg_price": 180000.0,
+                     "current_price": 192000.0, "eval_amount": 384000, "pl_amount": 24000, "profit_rate": 6.67},
+                ],
+            },
+            "crypto": {
+                "cash": 12345, "total": 87600,
+                "holdings": [
+                    {"ticker": "KRW-BTC", "qty": 0.0008, "avg_price": 87000000.0, "current_price": 91000000.0, "profit_rate": 4.60},
+                    {"ticker": "KRW-ETH", "qty": 0.012,  "avg_price": 3200000.0,  "current_price": 3450000.0,  "profit_rate": 7.81},
+                    {"ticker": "KRW-SOL", "qty": 0.45,   "avg_price": 110000.0,   "current_price": 115000.0,   "profit_rate": 4.55},
+                ],
+            },
+            "realized_pl": realized,
         }
     from trader import kis_client, upbit_client
-    result = {}
+    result = {"realized_pl": realized}
     if config.is_kis_ready:
         try:
-            result["stock"] = kis_client.get_balance()
+            result["stock"] = await asyncio.to_thread(kis_client.get_balance)
         except Exception as e:
             result["stock"] = {"error": str(e)}
     if config.is_upbit_ready:
         try:
-            result["crypto"] = upbit_client.get_balance()
+            result["crypto"] = await asyncio.to_thread(upbit_client.get_balance)
         except Exception as e:
             result["crypto"] = {"error": str(e)}
     return result

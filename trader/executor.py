@@ -170,6 +170,35 @@ def execute_crypto(ticker: str, action: str, confidence: float, reason: str,
 
 
 
+def get_realized_pl() -> dict:
+    """매도 기록 기반 실현 손익 집계."""
+    trades = _load_trades()
+    total_pl = 0
+    total_pl_stock = 0
+    total_pl_crypto = 0
+    count = 0
+    for t in trades:
+        if t.get("action") != "SELL":
+            continue
+        avg = t.get("avg_price", 0)
+        price = t.get("price", 0)
+        qty = t.get("qty", 0) or (t.get("amount_krw", 0) / price if price else 0)
+        if avg and price and qty:
+            pl = (price - avg) * qty
+            total_pl += pl
+            if t.get("market") == "stock":
+                total_pl_stock += pl
+            else:
+                total_pl_crypto += pl
+            count += 1
+    return {
+        "total":  round(total_pl),
+        "stock":  round(total_pl_stock),
+        "crypto": round(total_pl_crypto),
+        "count":  count,
+    }
+
+
 def get_trade_history(limit: int = 50) -> list:
     trades = _load_trades()
     return list(reversed(trades[-limit:]))

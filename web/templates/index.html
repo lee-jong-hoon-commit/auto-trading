@@ -220,6 +220,8 @@
 
   <!-- 포트폴리오 탭 -->
   <div class="panel" id="panel-portfolio">
+    <!-- 자산 요약 카드 -->
+    <div id="asset-summary" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-bottom:12px"></div>
     <div class="card" style="flex:1">
       <div class="card-title">보유 현황</div>
       <div class="scroll-x"><div id="holdings-list"><div class="empty">보유 없음</div></div></div>
@@ -517,32 +519,83 @@ function toggleSummaries() {
 }
 
 // ───────────────────── 포트폴리오 ─────────────────────
-function renderHoldings(stock, crypto) {
+function renderAssetSummary(stock, crypto, realizedPl) {
+  const el = document.getElementById('asset-summary');
+  if (!el) return;
+  const s = stock || {}, c = crypto || {}, r = realizedPl || {};
+
+  // 미실현 손익: KIS 합계 + 코인 직접 계산
+  const stockUPL  = s.unrealized_pl ?? 0;
+  const cryptoUPL = (c.holdings || []).reduce((acc, h) => {
+    const pl = h.current_price && h.avg_price && h.qty
+      ? (h.current_price - h.avg_price) * h.qty : 0;
+    return acc + pl;
+  }, 0);
+  const totalUPL  = stockUPL + cryptoUPL;
+
+  // 총 자산 = 주식(현금+평가) + 코인 합계
+  const stockTotal  = s.total  || (s.cash || 0) + (s.holdings || []).reduce((a, h) => a + (h.eval_amount || h.current_price * h.qty || 0), 0);
+  const cryptoTotal = c.total  || (c.cash || 0) + (c.holdings || []).reduce((a, h) => a + (h.current_price || 0) * h.qty, 0);
+  const grandTotal  = stockTotal + cryptoTotal;
+
+  const uplColor  = totalUPL  >= 0 ? '#3fb950' : '#f85149';
+  const rplColor  = (r.total||0) >= 0 ? '#3fb950' : '#f85149';
+  const uplSign   = totalUPL  >= 0 ? '+' : '';
+  const rplSign   = (r.total||0) >= 0 ? '+' : '';
+
+  const card = (icon, label, val, sub) => `
+    <div style="background:#161b22;border:1px solid #30363d;border-radius:8px;padding:12px 14px">
+      <div class="small gray" style="margin-bottom:4px">${icon} ${label}</div>
+      <div style="font-size:15px;font-weight:700">${val}</div>
+      ${sub ? `<div class="small" style="margin-top:3px;color:#8b949e">${sub}</div>` : ''}
+    </div>`;
+
+  el.innerHTML =
+    card('💰', '예수금 (주식)', fmt(s.cash || 0),
+         s.settlement_cash != null ? `정산 후 출금 가능: ${fmt(s.settlement_cash)}` : null) +
+    card('🪙', '코인 잔고', fmt(c.cash || 0), null) +
+    card('📊', '총 평가 자산', fmt(grandTotal),
+         `주식 ${fmt(stockTotal)} / 코인 ${fmt(cryptoTotal)}`) +
+    card('📈', '미실현 손익', `<span style="color:${uplColor}">${uplSign}${fmt(Math.round(totalUPL))}</span>`,
+         `주식 ${uplSign}${fmt(Math.round(stockUPL))} / 코인 ${uplSign}${fmt(Math.round(cryptoUPL))}`) +
+    card('✅', '실현 손익 (매도)', `<span style="color:${rplColor}">${rplSign}${fmt(r.total||0)}</span>`,
+         `주식 ${rplSign}${fmt(r.stock||0)} / 코인 ${rplSign}${fmt(r.crypto||0)} (${r.count||0}건)`);
+}
+
+function renderHoldings(stock, crypto, realizedPl) {
+  renderAssetSummary(stock, crypto, realizedPl);
   const list = [
     ...(stock.holdings || []).map(h => ({
       type: '주식', cls: 'blue', name: h.name || h.code, ticker: h.code,
       qty: h.qty, avg: h.avg_price, invest: Math.round(h.qty * h.avg_price),
       current: h.current_price, rate: h.profit_rate,
+      pl: h.pl_amount != null ? h.pl_amount : null,
     })),
     ...(crypto.holdings || []).filter(h => (h.current_price || 0) * h.qty >= 100).map(h => ({
       type: '코인', cls: 'yellow', name: h.currency, ticker: h.ticker,
       qty: h.qty, avg: h.avg_price, invest: Math.round(h.qty * h.avg_price),
-      current: h.current_price, rate: h.profit_rate,
+      current: h.current_price, rate: h.profit_rate, pl: null,
     })),
   ];
   const el = document.getElementById('holdings-list');
   if (!list.length) { el.innerHTML = '<div class="empty">보유 없음</div>'; return; }
   el.innerHTML = `<table>
-    <thead><tr><th>구분</th><th>종목</th><th>수량</th><th>투자금액</th><th>평단가</th><th>현재가</th><th>손익</th></tr></thead>
-    <tbody>${list.map(h => `<tr>
-      <td><span class="badge badge-${h.cls}">${h.type}</span></td>
-      <td><div style="font-weight:600">${h.name}</div><div class="small">${h.ticker}</div></td>
-      <td class="gray">${Number(h.qty).toLocaleString('ko-KR', { maximumFractionDigits: 4 })}</td>
-      <td style="white-space:nowrap">${fmt(h.invest)}</td>
-      <td style="white-space:nowrap">${fmt(h.avg)}</td>
-      <td style="white-space:nowrap">${fmt(h.current)}</td>
-      <td>${pct(h.rate)}</td>
-    </tr>`).join('')}</tbody>
+    <thead><tr><th>구분</th><th>종목</th><th>수량</th><th>투자금액</th><th>평단가</th><th>현재가</th><th>손익률</th><th>손익금액</th></tr></thead>
+    <tbody>${list.map(h => {
+      const plCell = h.pl != null
+        ? `<span style="color:${h.pl>=0?'#3fb950':'#f85149'}">${h.pl>=0?'+':''}${fmt(h.pl)}</span>`
+        : '<span class="gray">-</span>';
+      return `<tr>
+        <td><span class="badge badge-${h.cls}">${h.type}</span></td>
+        <td><div style="font-weight:600">${h.name}</div><div class="small">${h.ticker}</div></td>
+        <td class="gray">${Number(h.qty).toLocaleString('ko-KR', { maximumFractionDigits: 4 })}</td>
+        <td style="white-space:nowrap">${fmt(h.invest)}</td>
+        <td style="white-space:nowrap">${fmt(h.avg)}</td>
+        <td style="white-space:nowrap">${fmt(h.current)}</td>
+        <td>${pct(h.rate)}</td>
+        <td style="white-space:nowrap">${plCell}</td>
+      </tr>`;
+    }).join('')}</tbody>
   </table>`;
 }
 
@@ -670,7 +723,7 @@ function connectStream() {
         const crypto = data.portfolio?.crypto || {};
         if (stock.cash  != null) document.getElementById('stock-cash').textContent  = fmt(stock.cash);
         if (crypto.cash != null) document.getElementById('crypto-cash').textContent = fmt(crypto.cash);
-        renderHoldings(stock, crypto);
+        renderHoldings(stock, crypto, data.portfolio?.realized_pl);
       }
 
       if (data.trades) {
@@ -1043,7 +1096,7 @@ async function refreshAll() {
     const s = p.stock || {}, c = p.crypto || {};
     if (s.cash  != null) document.getElementById('stock-cash').textContent  = fmt(s.cash);
     if (c.cash  != null) document.getElementById('crypto-cash').textContent = fmt(c.cash);
-    renderHoldings(s, c);
+    renderHoldings(s, c, p.realized_pl);
   } catch (e) {}
   try { await loadTradesPage(1); } catch (e) {}
   if (btn) { btn.innerHTML = '↻ 새로고침'; btn.disabled = false; }

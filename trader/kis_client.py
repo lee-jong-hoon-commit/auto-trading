@@ -249,17 +249,22 @@ def get_balance() -> dict:
         resp.raise_for_status()
         break
     data = resp.json()
+    o2 = data["output2"][0] if data.get("output2") else {}
     return {
-        "cash": int(data["output2"][0]["dnca_tot_amt"]) if data.get("output2") else 0,
-        "total": int(data["output2"][0]["tot_evlu_amt"]) if data.get("output2") else 0,
+        "cash":            int(o2.get("dnca_tot_amt", 0)),
+        "settlement_cash": int(o2.get("prvs_rcdl_excc_amt", 0)),  # T+2 정산 후 출금 가능
+        "total":           int(o2.get("tot_evlu_amt", 0)),         # 현금 + 주식 평가 합계
+        "unrealized_pl":   int(o2.get("evlu_pfls_smtl_amt", 0)),  # 미실현 손익 합계
         "holdings": [
             {
-                "code": h["pdno"],
-                "name": h["prdt_name"],
-                "qty": int(h["hldg_qty"]),
-                "avg_price": float(h["pchs_avg_pric"]),
+                "code":          h["pdno"],
+                "name":          h["prdt_name"],
+                "qty":           int(h["hldg_qty"]),
+                "avg_price":     float(h["pchs_avg_pric"]),
                 "current_price": float(h["prpr"]),
-                "profit_rate": float(h["evlu_pfls_rt"]),
+                "eval_amount":   int(h.get("evlu_amt", 0)),        # 평가금액
+                "pl_amount":     int(h.get("evlu_pfls_amt", 0)),   # 평가손익금액
+                "profit_rate":   float(h["evlu_pfls_rt"]),
             }
             for h in data.get("output1", [])
             if int(h.get("hldg_qty", 0)) > 0
