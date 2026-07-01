@@ -252,6 +252,7 @@ def get_balance() -> dict:
     o2 = data["output2"][0] if data.get("output2") else {}
     return {
         "cash":            int(o2.get("dnca_tot_amt", 0)),
+        "orderable_cash":  int(o2.get("ord_psbl_cash", 0)),        # 실제 주문가능금액 (이걸로 상한 계산)
         "settlement_cash": int(o2.get("prvs_rcdl_excc_amt", 0)),  # T+2 정산 후 출금 가능
         "total":           int(o2.get("tot_evlu_amt", 0)),         # 현금 + 주식 평가 합계
         "unrealized_pl":   int(o2.get("evlu_pfls_smtl_amt", 0)),  # 미실현 손익 합계

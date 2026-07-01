@@ -41,10 +41,11 @@ def execute_stock(code: str, name: str, action: str, confidence: float, reason: 
             return {"status": "skipped", "reason": f"현재가 조회 실패 ({code})"}
 
         if action == "BUY":
-            # AI가 지정한 금액 사용, 없으면 잔고의 50%; 최소 잔고 30% 보장
-            budget = float(amount_krw) if amount_krw else cash * 0.5
-            budget = max(budget, cash * 0.3)  # AI 소액 지정 시 최소 30%로 보정
-            budget = min(budget, cash * 0.8)  # 최대 잔고 80% 안전 제한
+            # KIS 주문가능금액 우선 사용 (예수금과 다를 수 있음 — T+2 미결제, 수수료 등)
+            orderable = portfolio.get("orderable_cash") or cash
+            budget = float(amount_krw) if amount_krw else orderable * 0.5
+            budget = max(budget, orderable * 0.3)    # AI 소액 지정 시 최소 30%로 보정
+            budget = min(budget, orderable * 0.95)   # 주문가능금액의 95% 상한 (수수료 여유)
             qty = int(budget // current_price)
             if qty < 1:
                 return {"status": "skipped", "reason": f"예산 부족 ({budget:,.0f}원으로 {current_price:,.0f}원짜리 매수 불가)"}
