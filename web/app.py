@@ -1,4 +1,5 @@
 """FastAPI 웹 대시보드"""
+import os
 import asyncio
 import json
 from contextlib import asynccontextmanager
@@ -10,13 +11,16 @@ from config import config
 from trader import bot, executor
 
 
+UI_ONLY = os.getenv("UI_ONLY", "").lower() in ("1", "true", "yes")
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """서버 시작 시 봇 자동 시작"""
-    if config.is_kis_ready or config.is_upbit_ready:
+    """서버 시작 시 봇 자동 시작 (UI_ONLY=true면 봇 비활성화)"""
+    if not UI_ONLY and (config.is_kis_ready or config.is_upbit_ready):
         await bot.start_bot()
     yield
-    await bot.stop_bot()
+    if not UI_ONLY:
+        await bot.stop_bot()
 
 
 app = FastAPI(title="Auto Trader Dashboard", lifespan=lifespan)
@@ -31,6 +35,27 @@ async def dashboard():
 
 @app.get("/api/status")
 async def status():
+    if UI_ONLY:
+        return {
+            "running": True,
+            "last_run": "2026-07-01T12:00:00",
+            "market_summary": "📊 [UI 전용 모드] 실제 API 호출 없음. 화면 구성 확인용 더미 데이터입니다.",
+            "decisions": [
+                {"name": "삼성전자", "ticker": "005930", "action": "BUY",  "confidence": 0.78, "amount_krw": 75000, "reason": "MA5가 MA20을 상향 돌파했으며 RSI가 과매도 구간에서 반등 중입니다."},
+                {"name": "네이버",   "ticker": "035420", "action": "HOLD", "confidence": 0.52, "reason": "볼린저밴드 중간 밴드 부근에서 방향성이 불분명합니다."},
+                {"name": "KRW-BTC", "ticker": "KRW-BTC", "action": "BUY", "confidence": 0.71, "amount_krw": 50000, "reason": "MACD 골든크로스 발생, 거래량 증가 확인."},
+                {"name": "KRW-ETH", "ticker": "KRW-ETH", "action": "SELL","confidence": 0.65, "reason": "RSI 과매수 구간 진입, 단기 조정 예상."},
+            ],
+            "summaries": [
+                "[삼성전자] (stock)\n현재가: 75,000 | 등락: +2.05%\nRSI(14): 42.3 (중립)\nMA5: 73,200 | MA20: 71,800 → 단기>중기(상승)",
+                "[KRW-BTC] (crypto)\n현재가: 91,000,000 | 등락: +1.20%\nRSI(14): 55.1 (중립)\nMACD: 골든크로스",
+            ],
+            "errors": [],
+            "config": {
+                "kis_ready": False, "upbit_ready": False, "ai_ready": False,
+                "ai_provider": "ui_only", "mock_mode": True, "interval_min": 5,
+            },
+        }
     state = bot.get_state()
     return {
         "running": state["running"],
@@ -305,9 +330,47 @@ async def trading_guide(payload: dict):
 async def trades(limit: int = 50):
     return executor.get_trade_history(limit)
 
+@app.get("/api/trades/pages")
+async def trades_pages(page: int = 1, per_page: int = 20):
+    if UI_ONLY:
+        from datetime import datetime, timedelta
+        dummy = []
+        actions = [("BUY","삼성전자","005930","stock",75000,1,0,None),
+                   ("SELL","네이버","035420","stock",192000,2,6.67,182000),
+                   ("BUY","KRW-BTC","KRW-BTC","crypto",91000000,0.0008,0,None),
+                   ("SELL","KRW-ETH","KRW-ETH","crypto",3450000,0.012,7.81,3200000),
+                   ("BUY","카카오","035720","stock",48000,3,0,None),
+                   ("SELL","KRW-SOL","KRW-SOL","crypto",115000,0.45,4.55,110000),]
+        for i, (act, name, ticker, mkt, price, qty, rate, avgp) in enumerate(actions * 4):
+            t = datetime.now() - timedelta(hours=i*3)
+            rec = {"time": t.isoformat(), "market": mkt, "name": name,
+                   "ticker": ticker, "action": act, "price": price,
+                   "qty": qty, "amount": price*qty, "amount_krw": price*qty,
+                   "confidence": 0.70, "profit_rate": rate,
+                   "avg_price": avgp or 0, "result": {"rt_cd": "0"}}
+            dummy.append(rec)
+        total = len(dummy)
+        start = (page-1)*per_page
+        return {"trades": dummy[start:start+per_page], "total": total,
+                "page": page, "per_page": per_page,
+                "total_pages": max(1, -(-total // per_page))}
+    return executor.get_trade_history_page(page, per_page)
+
 
 @app.get("/api/portfolio")
 async def portfolio():
+    if UI_ONLY:
+        return {
+            "stock":  {"cash": 100002, "total": 135000, "holdings": [
+                {"code": "005930", "name": "삼성전자", "qty": 1, "avg_price": 72000.0, "current_price": 75000.0, "profit_rate": 4.17},
+                {"code": "035420", "name": "네이버",   "qty": 2, "avg_price": 180000.0,"current_price": 192000.0,"profit_rate": 6.67},
+            ]},
+            "crypto": {"cash": 12345, "total": 87600, "holdings": [
+                {"ticker": "KRW-BTC",  "qty": 0.0008, "avg_price": 87000000.0, "current_price": 91000000.0, "profit_rate": 4.60},
+                {"ticker": "KRW-ETH",  "qty": 0.012,  "avg_price": 3200000.0,  "current_price": 3450000.0,  "profit_rate": 7.81},
+                {"ticker": "KRW-SOL",  "qty": 0.45,   "avg_price": 110000.0,   "current_price": 115000.0,   "profit_rate": 4.55},
+            ]},
+        }
     from trader import kis_client, upbit_client
     result = {}
     if config.is_kis_ready:

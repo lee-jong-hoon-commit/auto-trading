@@ -55,6 +55,7 @@ def execute_stock(code: str, name: str, action: str, confidence: float, reason: 
             if not holding:
                 return {"status": "skipped", "reason": "보유 종목 없음"}
             qty = holding["qty"]
+            avg_price = holding.get("avg_price", 0)
             result = kis_client.place_order(code, qty, int(current_price), "sell")
 
         else:
@@ -82,6 +83,7 @@ def execute_stock(code: str, name: str, action: str, confidence: float, reason: 
         if action == "SELL":
             holding = next((h for h in portfolio.get("holdings", []) if h["code"] == code), None)
             if holding:
+                record["avg_price"]   = holding.get("avg_price", 0)
                 record["profit_rate"] = holding.get("profit_rate", 0)
 
         _save_trade(record)
@@ -149,6 +151,7 @@ def execute_crypto(ticker: str, action: str, confidence: float, reason: str,
                 "price": current_price,
                 "qty": qty,
                 "amount_krw": current_price * qty,
+                "avg_price":  holding.get("avg_price", 0),
                 "profit_rate": holding.get("profit_rate", 0),
                 "confidence": confidence,
                 "reason": reason,
@@ -170,3 +173,16 @@ def execute_crypto(ticker: str, action: str, confidence: float, reason: str,
 def get_trade_history(limit: int = 50) -> list:
     trades = _load_trades()
     return list(reversed(trades[-limit:]))
+
+def get_trade_history_page(page: int = 1, per_page: int = 20) -> dict:
+    trades = list(reversed(_load_trades()))
+    total = len(trades)
+    start = (page - 1) * per_page
+    end   = start + per_page
+    return {
+        "trades":    trades[start:end],
+        "total":     total,
+        "page":      page,
+        "per_page":  per_page,
+        "total_pages": max(1, -(-total // per_page)),  # ceiling division
+    }
