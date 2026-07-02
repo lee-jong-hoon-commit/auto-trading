@@ -1018,10 +1018,11 @@ function renderAssetSummary(stock, crypto, realizedPl) {
   }, 0);
   const totalUPL  = stockUPL + cryptoUPL;
 
-  // 총 자산 = 주식(예수금+평가) + 코인 합계
-  // KIS tot_evlu_amt는 T+2 정산 기준이라 예수금 전체를 반영하지 않으므로 직접 계산
+  // 총 자산 = 주식(주문가능금액+평가) + 코인 합계
+  // 예수금은 T+2 결제 대기 포함으로 부풀려짐 → 주문가능금액(orderable_cash) 사용
   const stockHoldingsEval = (s.holdings || []).reduce((a, h) => a + (h.eval_amount || h.current_price * h.qty || 0), 0);
-  const stockTotal  = (s.cash || 0) + stockHoldingsEval;
+  const stockOrderable  = s.orderable_cash != null ? s.orderable_cash : (s.cash || 0);
+  const stockTotal  = stockOrderable + stockHoldingsEval;
   const cryptoTotal = (c.cash || 0) + (c.holdings || []).reduce((a, h) => a + (h.eval_amount || (h.current_price || 0) * h.qty || 0), 0);
   const grandTotal  = stockTotal + cryptoTotal;
 
