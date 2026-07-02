@@ -211,32 +211,50 @@ def analyze_and_decide(
 
     text = _extract_json(text)
     try:
-        result = json.loads(text)
-        result.setdefault("decisions", [])
-        result.setdefault("market_summary", "")
-        result["decisions"] = _validate_decisions(result["decisions"], stock_summaries, crypto_summaries, portfolio_status)
-        return result
-    except json.JSONDecodeError:
-        logger.warning(f"AI JSON 파싱 실패, 부분 추출 시도. 응답 앞부분: {text[:200]}")
+        parsed = json.loads(text)
+        # Gemini가 decisions 배열을 직접 리스트로 반환하는 경우 처리
+        if isinstance(parsed, list):
+            parsed = {"decisions": parsed, "market_summary": ""}
+        elif not isinstance(parsed, dict):
+            raise json.JSONDecodeError("unexpected type", text, 0)
+        parsed.setdefault("decisions", [])
+        parsed.setdefault("market_summary", "")
+        parsed["decisions"] = _validate_decisions(parsed["decisions"], stock_summaries, crypto_summaries, portfolio_status)
+        return parsed
+    except (json.JSONDecodeError, Exception) as e:
+        logger.warning(f"AI JSON 파싱 실패, 부분 추출 시도. 응답 앞부분: {text[:300]}")
         decisions = []
         summary = ""
 
-        # decisions 배열 추출 — 탐욕적 매칭으로 중첩 괄호 대응
+        # 1) decisions 배열 추출 — 중첩 괄호 대응
         match_d = re.search(r'"decisions"\s*:\s*(\[.*\])', text, re.DOTALL)
         if match_d:
             try:
                 decisions = _validate_decisions(
                     json.loads(match_d.group(1)), stock_summaries, crypto_summaries, portfolio_status
                 )
-            except json.JSONDecodeError:
+            except (json.JSONDecodeError, Exception):
                 pass
 
-        # market_summary 추출
+        # 2) 잘린 JSON에서 완성된 개별 결정 객체만 추출
+        if not decisions:
+            raw_items = re.findall(r'\{[^{}]*"ticker"[^{}]*"action"[^{}]*\}', text, re.DOTALL)
+            parsed_items = []
+            for item in raw_items:
+                try:
+                    parsed_items.append(json.loads(item))
+                except json.JSONDecodeError:
+                    pass
+            if parsed_items:
+                decisions = _validate_decisions(parsed_items, stock_summaries, crypto_summaries, portfolio_status)
+
+        # 3) market_summary 추출
         match_s = re.search(r'"market_summary"\s*:\s*"(.*?)"(?:\s*[,}])', text, re.DOTALL)
         if match_s:
             summary = match_s.group(1).replace('\\n', '\n')
 
         if decisions:
+            logger.info(f"부분 추출 성공: {len(decisions)}건")
             return {"decisions": decisions, "market_summary": summary or "시장 요약 추출 실패"}
         return {"decisions": [], "market_summary": "AI 응답 파싱 실패", "error": True}
 
