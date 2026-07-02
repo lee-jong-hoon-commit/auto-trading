@@ -2,6 +2,10 @@
 import os
 import asyncio
 import json
+import hmac
+import hashlib
+import subprocess
+from datetime import datetime, timezone, timedelta
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
@@ -9,6 +13,14 @@ from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from pathlib import Path
 from config import config
 from trader import bot, executor
+
+KST = timezone(timedelta(hours=9))
+
+# 자동 배포 설정
+DEPLOY_SECRET  = os.getenv("DEPLOY_WEBHOOK_SECRET", "")
+DEPLOY_BRANCH  = os.getenv("DEPLOY_BRANCH", "claude/auto-trader-handover-nesasr")
+DEPLOY_SCRIPT  = str(Path(__file__).parent.parent / "deploy.sh")
+_deploy_status = {"last_deploy": None, "result": "없음", "branch": None}
 
 
 UI_ONLY = os.getenv("UI_ONLY", "").lower() in ("1", "true", "yes")
@@ -465,3 +477,76 @@ async def watchlist_add_ticker(payload: dict):
 async def watchlist_remove_ticker(ticker: str):
     from trader import watchlist
     return {"ok": True, "tickers": watchlist.remove_ticker(ticker)}
+
+
+# ── 자동 배포 webhook ────────────────────────────────────────────────
+def _run_deploy_bg(branch: str):
+    """백그라운드에서 deploy.sh 실행 (응답 전송 후 3초 뒤 시작)."""
+    import time, logging
+    time.sleep(3)   # FastAPI가 200 응답을 보낼 시간 확보
+    logger = logging.getLogger("deploy")
+    logger.info(f"자동 배포 시작 (branch={branch})")
+    try:
+        proc = subprocess.run(
+            ["bash", DEPLOY_SCRIPT],
+            capture_output=True, text=True, timeout=120
+        )
+        result = "성공" if proc.returncode == 0 else f"실패(code={proc.returncode})"
+        logger.info(f"자동 배포 {result}\n{proc.stdout[-500:] if proc.stdout else ''}")
+        _deploy_status.update({
+            "last_deploy": datetime.now(KST).isoformat(),
+            "result": result,
+            "branch": branch,
+            "log": (proc.stdout or "")[-800:],
+        })
+    except subprocess.TimeoutExpired:
+        _deploy_status.update({"last_deploy": datetime.now(KST).isoformat(),
+                                "result": "타임아웃(120s)", "branch": branch})
+    except Exception as e:
+        _deploy_status.update({"last_deploy": datetime.now(KST).isoformat(),
+                                "result": f"오류: {e}", "branch": branch})
+
+
+@app.post("/webhook/deploy")
+async def webhook_deploy(request: Request):
+    """GitHub Push 이벤트 수신 → deploy.sh 자동 실행."""
+    body = await request.body()
+
+    # HMAC 서명 검증 (시크릿 설정 시)
+    if DEPLOY_SECRET:
+        sig_header = request.headers.get("X-Hub-Signature-256", "")
+        expected   = "sha256=" + hmac.new(
+            DEPLOY_SECRET.encode(), body, hashlib.sha256
+        ).hexdigest()
+        if not hmac.compare_digest(sig_header, expected):
+            return JSONResponse({"error": "서명 불일치"}, status_code=401)
+
+    try:
+        payload = json.loads(body)
+    except Exception:
+        return JSONResponse({"error": "JSON 파싱 실패"}, status_code=400)
+
+    ref    = payload.get("ref", "")
+    pusher = payload.get("pusher", {}).get("name", "unknown")
+    target = f"refs/heads/{DEPLOY_BRANCH}"
+
+    if ref != target:
+        return {"status": "skipped", "reason": f"대상 브랜치 아님 ({ref})"}
+
+    # 이미 배포 중이면 무시
+    import threading
+    t = threading.Thread(target=_run_deploy_bg, args=(DEPLOY_BRANCH,), daemon=True)
+    t.start()
+
+    return {
+        "status":  "deploying",
+        "branch":  DEPLOY_BRANCH,
+        "pusher":  pusher,
+        "message": "deploy.sh 실행 중 (약 30초 후 완료)"
+    }
+
+
+@app.get("/api/deploy-status")
+async def deploy_status_api():
+    """마지막 자동 배포 결과 조회."""
+    return _deploy_status
