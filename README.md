@@ -1,7 +1,70 @@
 # Auto Trader - AI 자동매매 시스템
 
-한국투자증권(주식) + 업비트(코인) AI 자동매매. AI 엔진은 **Ollama(로컬·무료)** 가
-기본이며, 원하면 Claude(Anthropic)로 전환할 수 있습니다.
+> 한국투자증권(주식) + 업비트(코인) AI 자동매매 대시보드  
+> 5가지 기술적 전략 코드 투표 → AI 신뢰도 산출 → 자동 주문 실행
+
+---
+
+## 화면 미리보기
+
+### 메인 대시보드
+![대시보드](screenshots/01_dashboard.png)
+
+### AI 분석 (5전략 코드 투표 시스템)
+![AI 분석](screenshots/02_ai_analysis.png)
+
+### 포트폴리오 현황
+![포트폴리오](screenshots/01_portfolio.png)
+
+### 거래내역
+![거래내역](screenshots/03_trades.png)
+
+### 관심종목
+![관심종목](screenshots/04_watchlist.png)
+
+### 매매 가이드
+![매매 가이드](screenshots/05_guide.png)
+
+---
+
+## 주요 기능
+
+| 기능 | 설명 |
+|------|------|
+| 5전략 코드 투표 | 추세추종·모멘텀·평균회귀·돌파·거래량 각 +1/0/-1 투표 → 방향 결정 |
+| AI 신뢰도 산출 | Gemini / Claude / Ollama 중 선택, 투표 결과 기반 신뢰도 부여 |
+| 수동 매매 | 종목명 검색 → 비율(10%~전체) 선택 → 즉시 주문 |
+| 실시간 스트리밍 | SSE로 봇 로그·결정 실시간 표시 |
+| GitHub Webhook 자동배포 | 푸시 → GCP 자동 git pull + 서비스 재시작 |
+
+## 기술 스택
+
+```
+Backend   FastAPI + SSE (실시간 스트리밍)
+AI        Google Gemini / Anthropic Claude / Ollama (선택)
+주식 API  한국투자증권 KIS API
+코인 API  업비트 Open API
+인프라    GCP Compute Engine (Ubuntu 24.04)
+배포      GitHub Webhook → 자동배포 스크립트
+```
+
+## 5전략 투표 시스템
+
+```
+추세추종   ADX + 이동평균 골든/데드크로스     → +1 / 0 / -1
+모멘텀     RSI · Stochastic · Williams%R · ROC → +1 / 0 / -1
+평균회귀   MACD · 볼린저밴드 · VWAP           → +1 / 0 / -1
+돌파전략   52주 신고가 · Pivot R1/S1          → +1 / 0 / -1
+거래량분석 OBV · 거래량 비율                  → +1 / 0 / -1
+
+합산 score > 0 → BUY / score < 0 → SELL / score = 0 → HOLD
+AI는 방향을 바꿀 수 없고, 신뢰도와 이유만 부여
+```
+
+---
+
+한국투자증권(주식) + 업비트(코인) AI 자동매매. AI 엔진은 **Gemini(기본)** 또는
+Ollama(로컬·무료), Claude(Anthropic)로 전환할 수 있습니다.
 
 ## 빠른 시작
 
