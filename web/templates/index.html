@@ -1018,9 +1018,11 @@ function renderAssetSummary(stock, crypto, realizedPl) {
   }, 0);
   const totalUPL  = stockUPL + cryptoUPL;
 
-  // 총 자산 = 주식(현금+평가) + 코인 합계
-  const stockTotal  = s.total  || (s.cash || 0) + (s.holdings || []).reduce((a, h) => a + (h.eval_amount || h.current_price * h.qty || 0), 0);
-  const cryptoTotal = c.total  || (c.cash || 0) + (c.holdings || []).reduce((a, h) => a + (h.current_price || 0) * h.qty, 0);
+  // 총 자산 = 주식(예수금+평가) + 코인 합계
+  // KIS tot_evlu_amt는 T+2 정산 기준이라 예수금 전체를 반영하지 않으므로 직접 계산
+  const stockHoldingsEval = (s.holdings || []).reduce((a, h) => a + (h.eval_amount || h.current_price * h.qty || 0), 0);
+  const stockTotal  = (s.cash || 0) + stockHoldingsEval;
+  const cryptoTotal = (c.cash || 0) + (c.holdings || []).reduce((a, h) => a + (h.eval_amount || (h.current_price || 0) * h.qty || 0), 0);
   const grandTotal  = stockTotal + cryptoTotal;
 
   const uplColor  = totalUPL  >= 0 ? '#3fb950' : '#f85149';

@@ -96,7 +96,7 @@ async def stream():
         import time
         # 잔고는 30초마다 갱신 (KIS API 느림 방지)
         # 단, 새 거래 체결이 감지되면 즉시 갱신
-        cached_portfolio = {"stock": {}, "crypto": {}}
+        cached_portfolio = {"stock": {}, "crypto": {}, "realized_pl": {}}
         last_balance_fetch = 0
         last_trade_count = -1  # -1 = 초기화 전
 
@@ -123,6 +123,7 @@ async def stream():
                             cached_portfolio["crypto"] = await asyncio.to_thread(upbit_client.get_balance)
                     except Exception:
                         pass
+                    cached_portfolio["realized_pl"] = executor.get_realized_pl()
                     last_balance_fetch = now
                 data = {
                     "running": state["running"],
