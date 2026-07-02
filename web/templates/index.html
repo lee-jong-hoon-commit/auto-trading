@@ -914,15 +914,39 @@ function setMtAction(a) {
   document.getElementById('mt-submit-btn').className = 'btn ' + (a==='BUY' ? 'btn-green' : 'btn-red');
   document.getElementById('mt-submit-btn').textContent = a==='BUY' ? '매수 실행' : '매도 실행';
   if (_mtPortfolio) updateMtBalanceInfo();
+  _showHoldingsDrop();
 }
 
 function setMtMarket(m) {
   _mtMarket = m;
   document.getElementById('mt-stock-btn').className  = 'btn ' + (m==='stock'  ? 'btn-blue' : 'btn-gray');
   document.getElementById('mt-crypto-btn').className = 'btn ' + (m==='crypto' ? 'btn-blue' : 'btn-gray');
-  // 시장 전환 시 검색 초기화
   clearMtSearch();
   if (_mtPortfolio) updateMtBalanceInfo();
+  _showHoldingsDrop();
+}
+
+function _showHoldingsDrop() {
+  if (_mtAction !== 'SELL') return;
+  const drop = document.getElementById('mt-search-drop');
+  const p = _cachedPortfolio;
+  if (!p) return;
+  const holdings = _mtMarket === 'stock'
+    ? (p.stock?.holdings || []).map(h => ({ code: h.code, name: h.name, extra: `${h.qty}주 | 평균 ${(h.avg_price||0).toLocaleString()}원` }))
+    : (p.crypto?.holdings || []).map(h => ({ code: h.ticker, name: h.ticker, extra: `${(h.eval_amount||0).toLocaleString()}원` }));
+  if (!holdings.length) { drop.style.display = 'none'; return; }
+  _mtDropIdx = -1;
+  drop.innerHTML = `<div style="padding:6px 12px;font-size:11px;color:#8b949e;border-bottom:1px solid #30363d">보유 종목</div>` +
+    holdings.map((h, i) =>
+      `<div class="mt-drop-item" data-idx="${i}" data-code="${h.code}" data-name="${h.name}"
+        onclick="selectMtItem('${h.code}','${h.name}')"
+        style="padding:8px 12px;cursor:pointer;font-size:13px;border-bottom:1px solid #21262d;
+               display:flex;justify-content:space-between;align-items:center">
+        <span>${h.name}</span>
+        <span style="color:#8b949e;font-size:11px">${h.extra}</span>
+      </div>`
+    ).join('');
+  drop.style.display = 'block';
 }
 
 async function submitManualTrade() {
@@ -960,7 +984,9 @@ async function submitManualTrade() {
     if (ok) {
       const dQty = r.qty != null ? (r.qty > 1 ? r.qty+'주' : Number(r.qty).toFixed(4)) : '-';
       resEl.textContent = `✓ ${_mtAction==='BUY'?'매수':'매도'} 완료 — ${dQty} @ ${Number(r.price||0).toLocaleString('ko-KR')}원`;
+      // 성공 후 버튼 비활성 유지 — 중복 주문 방지
       setTimeout(() => { closeManualTrade(); loadTradesPage(1); refreshAll(); }, 1800);
+      return;
     } else {
       resEl.textContent = `✗ ${r.error || r.reason || '주문 실패'}`;
     }
@@ -968,6 +994,7 @@ async function submitManualTrade() {
     resEl.style.background = '#1f0d0d'; resEl.style.color = '#f85149';
     resEl.textContent = '✗ 네트워크 오류';
   }
+  // 실패 시에만 버튼 재활성
   document.getElementById('mt-submit-btn').disabled = false;
 }
 

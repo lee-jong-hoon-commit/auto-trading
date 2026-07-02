@@ -81,11 +81,13 @@ async def run_cycle():
             _get_stock_portfolio(), _get_crypto_portfolio()
         )
 
-        stock_cash = stock_portfolio.get("cash", 0)
+        # orderable_cash = 실제 주문가능금액 (주식 매수 후 T+2 정산 반영)
+        # cash = 예수금 총액 (매수 후에도 변하지 않으므로 예산으로 쓰면 안 됨)
+        stock_cash = stock_portfolio.get("orderable_cash") or stock_portfolio.get("cash", 0)
         crypto_cash = crypto_portfolio.get("cash", 0)
         stock_holdings = stock_portfolio.get("holdings", [])
         crypto_holdings = crypto_portfolio.get("holdings", [])
-        _log(f"잔고 — 주식: {stock_cash:,.0f}원 (보유 {len(stock_holdings)}종목), 코인: {crypto_cash:,.0f}원 (보유 {len(crypto_holdings)}종류)")
+        _log(f"잔고 — 주식 주문가능: {stock_cash:,.0f}원 (보유 {len(stock_holdings)}종목), 코인: {crypto_cash:,.0f}원 (보유 {len(crypto_holdings)}종류)")
 
         # 2. 분석 대상 종목 선정
         stock_candidates = []
@@ -206,13 +208,16 @@ async def run_cycle():
         _log(f"AI 결정 완료: BUY {buy_cnt}건, SELL {sell_cnt}건, HOLD {hold_cnt}건")
 
         # 5. 매매 실행
+        # AI가 반환한 name은 틀릴 수 있으므로 실제 분석 대상 목록의 이름 우선 사용
+        stock_name_map = {s.get("code", ""): s.get("name", "") for s in stock_candidates}
+
         executed = []
         for decision in decisions:
             action     = decision.get("action", "HOLD")
             confidence = decision.get("confidence", 0)
             reason     = decision.get("reason", "")
             ticker     = decision.get("ticker", "")
-            name       = decision.get("name", ticker)
+            name       = stock_name_map.get(ticker) or decision.get("name", ticker)
             amount_krw = decision.get("amount_krw")
 
             if action == "HOLD":
