@@ -94,33 +94,40 @@ def _chat(messages: list[dict], max_tokens: int = 4096, force_json: bool = True)
     if config.AI_PROVIDER == "gemini":
         if not config.GEMINI_API_KEY:
             return None
-        try:
-            system = next((m["content"] for m in messages if m["role"] == "system"), None)
-            chat_msgs = [m for m in messages if m["role"] != "system"]
-            body = {
-                "contents": [
-                    {"role": "user", "parts": [{"text": m["content"]}]}
-                    for m in chat_msgs
-                ],
-                "generationConfig": {
-                    "temperature": 0.3,
-                    "maxOutputTokens": max_tokens,
-                },
-            }
-            if system:
-                body["system_instruction"] = {"parts": [{"text": system}]}
-            if force_json:
-                body["generationConfig"]["responseMimeType"] = "application/json"
-            url = (
-                f"https://generativelanguage.googleapis.com/v1beta/models"
-                f"/{config.GEMINI_MODEL}:generateContent?key={config.GEMINI_API_KEY}"
-            )
-            resp = requests.post(url, json=body, timeout=60)
-            resp.raise_for_status()
-            return resp.json()["candidates"][0]["content"]["parts"][0]["text"]
-        except Exception as e:
-            logger.warning(f"Gemini 호출 실패 (model={config.GEMINI_MODEL}): {e}")
-            return None
+        # 주 모델 실패 시 폴백할 모델 순서
+        gemini_models = [config.GEMINI_MODEL]
+        if config.GEMINI_MODEL != "gemini-1.5-flash":
+            gemini_models.append("gemini-1.5-flash")
+        system = next((m["content"] for m in messages if m["role"] == "system"), None)
+        chat_msgs = [m for m in messages if m["role"] != "system"]
+        body = {
+            "contents": [
+                {"role": "user", "parts": [{"text": m["content"]}]}
+                for m in chat_msgs
+            ],
+            "generationConfig": {
+                "temperature": 0.3,
+                "maxOutputTokens": max_tokens,
+            },
+        }
+        if system:
+            body["system_instruction"] = {"parts": [{"text": system}]}
+        if force_json:
+            body["generationConfig"]["responseMimeType"] = "application/json"
+        for model in gemini_models:
+            try:
+                url = (
+                    f"https://generativelanguage.googleapis.com/v1beta/models"
+                    f"/{model}:generateContent?key={config.GEMINI_API_KEY}"
+                )
+                resp = requests.post(url, json=body, timeout=60)
+                resp.raise_for_status()
+                return resp.json()["candidates"][0]["content"]["parts"][0]["text"]
+            except Exception as e:
+                logger.warning(f"Gemini 호출 실패 (model={model}): {e}")
+                if model != gemini_models[-1]:
+                    logger.info(f"다음 Gemini 모델로 폴백: {gemini_models[gemini_models.index(model)+1]}")
+        return None
 
     # 기본: Ollama (로컬)
     try:
@@ -206,7 +213,12 @@ def analyze_and_decide(
         force_json=True,
     )
     if not text:
-        msg = "AI 엔진 호출 실패 (Ollama 미실행/모델 미설치 여부 확인)"
+        if config.AI_PROVIDER == "gemini":
+            msg = f"AI 엔진 호출 실패 (Gemini API 오류 — 잠시 후 재시도됩니다)"
+        elif config.AI_PROVIDER == "anthropic":
+            msg = "AI 엔진 호출 실패 (Anthropic API 오류)"
+        else:
+            msg = "AI 엔진 호출 실패 (Ollama 미실행/모델 미설치 여부 확인)"
         return {"decisions": [], "market_summary": msg, "error": True}
 
     text = _extract_json(text)
