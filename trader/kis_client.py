@@ -324,7 +324,7 @@ def get_current_price(code: str) -> float:
 
 
 def place_order(code: str, qty: int, price: int, side: str) -> dict:
-    """주문 실행 (side: 'buy' | 'sell')"""
+    """주문 실행 (side: 'buy' | 'sell'). 500 에러 시 응답 본문에서 사유를 추출해 반환."""
     mock_map = {"buy": "VTTC0802U", "sell": "VTTC0801U"}
     real_map = {"buy": "TTTC0802U", "sell": "TTTC0801U"}
     tr_id = mock_map[side] if config.KIS_MOCK else real_map[side]
@@ -341,6 +341,16 @@ def place_order(code: str, qty: int, price: int, side: str) -> dict:
             "ORD_UNPR": "0",
         },
     )
+    if resp.status_code == 500:
+        # 주문 중복 방지를 위해 재시도 없이 본문에서 사유 추출
+        try:
+            body = resp.json()
+            msg = body.get("msg1") or body.get("msg") or f"KIS 500 오류 ({code})"
+            body["rt_cd"] = body.get("rt_cd", "E")
+            body["error"] = {"message": msg, "rt_cd": "500"}
+            return body
+        except Exception:
+            return {"rt_cd": "E", "msg1": f"KIS 서버 오류 500 ({code})", "error": {"message": f"KIS 서버 오류 ({code})"}}
     resp.raise_for_status()
     return resp.json()
 

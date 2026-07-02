@@ -68,7 +68,9 @@ def execute_stock(code: str, name: str, action: str, confidence: float, reason: 
         kis_ok = str(result.get("rt_cd", "0")) == "0"
         if not kis_ok:
             err_msg = result.get("msg1") or result.get("msg_cd") or "KIS 주문 오류"
+            # 거래정지·관리종목 등 KIS 사유 메시지를 그대로 노출
             result["error"] = {"message": err_msg, "rt_cd": result.get("rt_cd")}
+            logger.warning(f"[STOCK] KIS 주문 거부 {name}({code}): {err_msg}")
 
         record = {
             "time": datetime.now(KST).isoformat(),
