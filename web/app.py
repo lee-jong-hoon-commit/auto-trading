@@ -105,12 +105,12 @@ async def stream():
                 state = bot.get_state()
                 now = time.time()
                 trades = executor.get_trade_history(20)
+                total_trade_count = executor.get_trade_count()
 
                 # 새 거래 체결 감지 → 포트폴리오 즉시 갱신
-                new_trade_count = len(trades)
-                if last_trade_count >= 0 and new_trade_count > last_trade_count:
+                if last_trade_count >= 0 and total_trade_count > last_trade_count:
                     last_balance_fetch = 0  # 캐시 무효화 → 다음 조건에서 즉시 재조회
-                last_trade_count = new_trade_count
+                last_trade_count = total_trade_count
 
                 if now - last_balance_fetch >= 30:
                     try:
@@ -133,7 +133,7 @@ async def stream():
                     "errors": state["errors"],
                     "portfolio": cached_portfolio,
                     "trades": trades,
-                    "trade_count": len(trades),
+                    "trade_count": total_trade_count,
                     "activity_log": state.get("activity_log", []),
                 }
                 yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"

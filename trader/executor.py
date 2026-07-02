@@ -44,7 +44,8 @@ def execute_stock(code: str, name: str, action: str, confidence: float, reason: 
 
         if action == "BUY":
             # KIS 주문가능금액 우선 사용 (예수금과 다를 수 있음 — T+2 미결제, 수수료 등)
-            orderable = portfolio.get("orderable_cash") or cash
+            _oc = portfolio.get("orderable_cash")
+            orderable = _oc if _oc is not None else cash
             budget = float(amount_krw) if amount_krw else orderable * 0.5
             budget = max(budget, orderable * 0.3)    # AI 소액 지정 시 최소 30%로 보정
             budget = min(budget, orderable * 0.95)   # 주문가능금액의 95% 상한 (수수료 여유)
@@ -187,9 +188,11 @@ def get_realized_pl() -> dict:
     for t in trades:
         if t.get("action") != "SELL":
             continue
+        count += 1
         avg = t.get("avg_price", 0)
         price = t.get("price", 0)
         qty = t.get("qty", 0) or (t.get("amount_krw", 0) / price if price else 0)
+        # avg_price가 있을 때만 실현 손익 계산 (없으면 0으로 처리)
         if avg and price and qty:
             pl = (price - avg) * qty
             total_pl += pl
@@ -197,13 +200,16 @@ def get_realized_pl() -> dict:
                 total_pl_stock += pl
             else:
                 total_pl_crypto += pl
-            count += 1
     return {
         "total":  round(total_pl),
         "stock":  round(total_pl_stock),
         "crypto": round(total_pl_crypto),
         "count":  count,
     }
+
+
+def get_trade_count() -> int:
+    return len(_load_trades())
 
 
 def get_trade_history(limit: int = 50) -> list:
