@@ -7,11 +7,12 @@ from config import config
 KST = timezone(timedelta(hours=9))
 
 def _is_stock_market_open() -> bool:
-    """주식 거래 가능 시간 여부 (KST 09:00~18:00, 평일)"""
+    """주식 거래 가능 시간 여부 (KST 09:00~15:30, 평일)"""
     now = datetime.now(KST)
     if now.weekday() >= 5:   # 토(5)·일(6) 제외
         return False
-    return 9 <= now.hour < 18
+    t = now.hour * 60 + now.minute
+    return 9 * 60 <= t < 15 * 60 + 30
 from trader import kis_client, upbit_client, analyzer, ai_engine, executor, watchlist
 
 logger = logging.getLogger(__name__)
@@ -83,7 +84,8 @@ async def run_cycle():
 
         # orderable_cash = 실제 주문가능금액 (주식 매수 후 T+2 정산 반영)
         # cash = 예수금 총액 (매수 후에도 변하지 않으므로 예산으로 쓰면 안 됨)
-        stock_cash = stock_portfolio.get("orderable_cash") or stock_portfolio.get("cash", 0)
+        _oc = stock_portfolio.get("orderable_cash")
+        stock_cash = _oc if _oc is not None else stock_portfolio.get("cash", 0)
         crypto_cash = crypto_portfolio.get("cash", 0)
         stock_holdings = stock_portfolio.get("holdings", [])
         crypto_holdings = crypto_portfolio.get("holdings", [])
@@ -96,7 +98,7 @@ async def run_cycle():
         stock_market_open = _is_stock_market_open()
         if config.is_kis_ready and not stock_market_open:
             now_kst = datetime.now(KST)
-            _log(f"주식 시장 시간 외 ({now_kst.strftime('%H:%M')} KST) — 주식 분석·거래 건너뜀 (09:00~18:00만 운영)")
+            _log(f"주식 시장 시간 외 ({now_kst.strftime('%H:%M')} KST) — 주식 분석·거래 건너뜀 (09:00~15:30만 운영)")
 
         if config.is_kis_ready and stock_market_open:
             held_codes = {h["code"] for h in stock_holdings}
@@ -221,6 +223,11 @@ async def run_cycle():
             amount_krw = decision.get("amount_krw")
 
             if action == "HOLD":
+                continue
+
+            # 주문가능금액 0원이면 주식 BUY 건너뜀 (SELL은 그대로 실행)
+            if action == "BUY" and not ticker.startswith("KRW-") and stock_cash <= 0:
+                _log(f"→ 스킵: {name} BUY — 주문가능금액 부족 ({stock_cash:,.0f}원)")
                 continue
 
             _log(f"주문 실행: {action} {name}({ticker}) confidence={confidence:.2f}")
