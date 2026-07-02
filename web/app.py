@@ -412,6 +412,33 @@ async def portfolio():
     return result
 
 
+# ---- KIS 잔고 원본 디버그 (어떤 필드가 '거래가능 원화'인지 확인용) ----
+@app.get("/api/debug/kis-balance-raw")
+async def debug_kis_balance_raw():
+    if UI_ONLY:
+        return {"error": "UI 전용 모드"}
+    from trader.kis_client import _headers, config as _cfg
+    import requests as _req
+    acct, suffix = _cfg.KIS_ACCOUNT_NO.split("-")
+    tr_id = "VTTC8434R" if _cfg.KIS_MOCK else "TTTC8434R"
+    params = {
+        "CANO": acct, "ACNT_PRDT_CD": suffix,
+        "AFHR_FLPR_YN": "N", "OFL_YN": "", "INQR_DVSN": "02",
+        "UNPR_DVSN": "01", "FUND_STTL_ICLD_YN": "N",
+        "FNCG_AMT_AUTO_RDPT_YN": "N", "PRCS_DVSN": "01",
+        "CTX_AREA_FK100": "", "CTX_AREA_NK100": "",
+    }
+    resp = _req.get(
+        f"{_cfg.KIS_BASE_URL}/uapi/domestic-stock/v1/trading/inquire-balance",
+        headers=_headers(tr_id), params=params,
+    )
+    data = resp.json()
+    o2 = data.get("output2", [{}])[0]
+    # 금액처럼 보이는 필드만 추려서 반환 (amt, cash, able 포함 필드명)
+    amount_fields = {k: v for k, v in o2.items() if any(x in k for x in ["amt", "cash", "able", "psbl", "evlu", "excc", "buy"])}
+    return {"all_amount_fields": amount_fields, "raw_output2": o2}
+
+
 # ---- 수동 매매 ----
 @app.post("/api/manual-trade")
 async def manual_trade(request: Request):
