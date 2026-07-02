@@ -529,11 +529,23 @@ const STRATEGY_COLORS = {
   '돌파전략': '#3fb950', '거래량분석': '#e3b341',
 };
 
+function _parseVote(text) {
+  if (!text) return null;
+  // 【전략투표】 매수3 관망1 매도1 → 방향: BUY (score +2/5)
+  const m = text.match(/【전략투표】\s*매수(\d+)\s*관망(\d+)\s*매도(\d+)\s*→\s*방향:\s*(\w+)\s*\(score\s*([+\-]\d+)/);
+  return m ? { buy: +m[1], hold: +m[2], sell: +m[3], direction: m[4], score: +m[5] } : null;
+}
+
 function _parseStrategies(text) {
   if (!text) return [];
   return text.split('\n').filter(l => l.startsWith('▶')).map(l => {
-    const m = l.match(/^▶\s*([^:]+):\s*(.+)$/);
-    return m ? { label: m[1].trim(), content: m[2].trim() } : null;
+    // ▶ 추세추종[매수]: ... 또는 ▶ 추세추종: ...
+    const m = l.match(/^▶\s*([^[\]:]+)(\[([^\]]+)\])?:\s*(.+)$/);
+    if (!m) return null;
+    const baseName = m[1].trim();
+    const sig      = m[3] || null;   // "매수" | "관망" | "매도" | null
+    const content  = m[4].trim();
+    return { label: baseName, sig, content };
   }).filter(Boolean);
 }
 
@@ -576,20 +588,49 @@ function renderDecisions(decisions, summary, lastRun, summaries) {
     const mkt  = market(d.ticker);
 
     // 5전략 지표 블록
-    const sumText   = sumMap[name] || sumMap[d.ticker] || '';
+    const sumText    = sumMap[name] || sumMap[d.ticker] || '';
+    const vote       = _parseVote(sumText);
     const strategies = _parseStrategies(sumText);
-    const indicId   = `ind-${i}`;
+    const indicId    = `ind-${i}`;
+
+    // 투표 현황 바
+    const voteHtml = vote ? (() => {
+      const total = vote.buy + vote.hold + vote.sell;
+      const bPct  = Math.round(vote.buy  / total * 100);
+      const hPct  = Math.round(vote.hold / total * 100);
+      const sPct  = 100 - bPct - hPct;
+      const dc    = vote.direction === 'BUY' ? '#3fb950' : vote.direction === 'SELL' ? '#f85149' : '#8b949e';
+      return `<div style="margin:8px 0 4px">
+        <div style="display:flex;justify-content:space-between;font-size:10px;margin-bottom:3px">
+          <span style="color:#3fb950">매수 ${vote.buy}</span>
+          <span style="color:${dc};font-weight:700">전략투표 → ${vote.direction} (${vote.score > 0 ? '+' : ''}${vote.score}/5)</span>
+          <span style="color:#f85149">매도 ${vote.sell}</span>
+        </div>
+        <div style="display:flex;height:5px;border-radius:3px;overflow:hidden;background:#21262d">
+          ${bPct ? `<div style="width:${bPct}%;background:#3fb950"></div>` : ''}
+          ${hPct ? `<div style="width:${hPct}%;background:#484f58"></div>` : ''}
+          ${sPct ? `<div style="width:${sPct}%;background:#f85149"></div>` : ''}
+        </div>
+      </div>`;
+    })() : '';
+
+    // 전략별 상세 (신호 색상 포함)
+    const SIG_COLOR = { '매수': '#3fb950', '관망': '#8b949e', '매도': '#f85149' };
     const indHtml   = strategies.length ? `
       <button id="btn-${indicId}" onclick="toggleIndicator('${indicId}')"
-        style="margin-top:8px;background:none;border:1px solid #30363d;color:#8b949e;
+        style="margin-top:4px;background:none;border:1px solid #30363d;color:#8b949e;
                border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;width:100%">
-        📊 지표 분석 ▼
+        📊 지표 상세 ▼
       </button>
-      <div id="${indicId}" style="display:none;margin-top:8px;display:none">
+      <div id="${indicId}" style="display:none;margin-top:8px">
         ${strategies.map(s => {
-          const sc = STRATEGY_COLORS[s.label] || '#8b949e';
-          return `<div style="margin-bottom:6px">
-            <div style="font-size:10px;font-weight:700;color:${sc};margin-bottom:2px">▶ ${s.label}</div>
+          const sc  = STRATEGY_COLORS[s.label] || '#8b949e';
+          const sgc = SIG_COLOR[s.sig] || sc;
+          const sigBadge = s.sig
+            ? `<span style="font-size:9px;background:${sgc}22;color:${sgc};border-radius:3px;padding:1px 5px;margin-left:4px">${s.sig}</span>`
+            : '';
+          return `<div style="margin-bottom:7px">
+            <div style="font-size:10px;font-weight:700;color:${sc};margin-bottom:2px">▶ ${s.label}${sigBadge}</div>
             <div style="font-size:11px;color:#c9d1d9;line-height:1.6;word-break:break-all">${s.content.replace(/\|/g,'<br>')}</div>
           </div>`;
         }).join('')}
@@ -612,6 +653,7 @@ function renderDecisions(decisions, summary, lastRun, summaries) {
         <span class="badge" style="background:${c}22;color:${c}">${lbl}</span>
       </div>
       <div class="dcard-reason">${d.reason}</div>
+      ${voteHtml}
       <div class="conf-bar"><div class="conf-fill" style="width:${pct}%;background:${c}"></div></div>
       <div class="conf-lbl"><span>신뢰도</span><span style="color:${c};font-weight:600">${pct}%</span></div>
       ${indHtml}${tradeHtml}
