@@ -1,8 +1,17 @@
 """자동매매 봇 메인 루프"""
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from config import config
+
+KST = timezone(timedelta(hours=9))
+
+def _is_stock_market_open() -> bool:
+    """주식 거래 가능 시간 여부 (KST 09:00~18:00, 평일)"""
+    now = datetime.now(KST)
+    if now.weekday() >= 5:   # 토(5)·일(6) 제외
+        return False
+    return 9 <= now.hour < 18
 from trader import kis_client, upbit_client, analyzer, ai_engine, executor, watchlist
 
 logger = logging.getLogger(__name__)
@@ -82,7 +91,12 @@ async def run_cycle():
         stock_candidates = []
         crypto_candidates = []
 
-        if config.is_kis_ready:
+        stock_market_open = _is_stock_market_open()
+        if config.is_kis_ready and not stock_market_open:
+            now_kst = datetime.now(KST)
+            _log(f"주식 시장 시간 외 ({now_kst.strftime('%H:%M')} KST) — 주식 분석·거래 건너뜀 (09:00~18:00만 운영)")
+
+        if config.is_kis_ready and stock_market_open:
             held_codes = {h["code"] for h in stock_holdings}
             _log(f"거래대금 상위 저가주 스캔 중 (예산 {stock_cash:,.0f}원 이하)...")
             dynamic = await asyncio.to_thread(kis_client.get_dynamic_stocks, stock_cash, 40)
