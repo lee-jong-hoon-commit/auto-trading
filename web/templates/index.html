@@ -243,10 +243,24 @@
           </select>
         </div>
 
-        <!-- 매수 시: 종목 코드 직접 입력 -->
-        <div id="mt-ticker-wrap">
-          <input id="mt-ticker" class="inp" placeholder="종목코드 (예: 005930 / KRW-BTC)" style="width:100%;box-sizing:border-box">
-          <input id="mt-name"   class="inp" placeholder="종목명 (선택)" style="width:100%;box-sizing:border-box;margin-top:6px">
+        <!-- 매수 시: 종목명 검색 자동완성 -->
+        <div id="mt-ticker-wrap" style="position:relative">
+          <input id="mt-search" class="inp" placeholder="종목명 검색 (예: 삼성전자, 비트코인)" autocomplete="off"
+            style="width:100%;box-sizing:border-box"
+            oninput="onMtSearch(this.value)" onkeydown="onMtSearchKey(event)">
+          <div id="mt-search-drop" style="display:none;position:absolute;top:100%;left:0;right:0;
+            background:#161b22;border:1px solid #30363d;border-radius:6px;z-index:200;
+            max-height:200px;overflow-y:auto;box-shadow:0 4px 12px #0008"></div>
+          <!-- 선택된 종목 표시 -->
+          <div id="mt-selected" style="display:none;margin-top:6px;padding:8px 10px;background:#0d1117;
+            border:1px solid #30363d;border-radius:6px;font-size:13px;display:flex;
+            justify-content:space-between;align-items:center">
+            <span id="mt-selected-text"></span>
+            <span onclick="clearMtSearch()" style="cursor:pointer;color:#8b949e;font-size:16px;line-height:1">×</span>
+          </div>
+          <!-- hidden fields -->
+          <input id="mt-ticker" type="hidden">
+          <input id="mt-name"   type="hidden">
         </div>
 
         <!-- 비율 선택 -->
@@ -636,8 +650,14 @@ function renderDecisions(decisions, summary, lastRun, summaries) {
         }).join('')}
       </div>` : '';
 
-    // 수동매매 버튼 (BUY/SELL 종목만)
-    const tradeHtml = d.action !== 'HOLD' ? `
+    // 수동매매 버튼: BUY는 항상, SELL은 실제 보유 중인 경우에만
+    const stockHoldings  = _cachedPortfolio?.stock?.holdings  || [];
+    const cryptoHoldings = _cachedPortfolio?.crypto?.holdings || [];
+    const isHeld = mkt === 'stock'
+      ? stockHoldings.some(h => h.code === d.ticker)
+      : cryptoHoldings.some(h => h.ticker === d.ticker);
+    const showBtn = d.action === 'BUY' || (d.action === 'SELL' && isHeld);
+    const tradeHtml = showBtn ? `
       <button onclick="openManualTrade('${d.ticker}','${name}','${mkt}','${d.action}')"
         style="margin-top:6px;width:100%;padding:5px;border-radius:6px;border:none;cursor:pointer;
                font-size:12px;font-weight:600;background:${c}22;color:${c}">
@@ -664,6 +684,100 @@ function renderDecisions(decisions, summary, lastRun, summaries) {
 // ───────────────────── 수동 매매 ─────────────────────
 let _mtAction = 'BUY', _mtMarket = 'stock', _mtPct = 50;
 let _mtPortfolio = null;   // { stock: {...}, crypto: {...} }
+let _cachedPortfolio = null; // refreshAll()에서 갱신, renderDecisions에서 참조
+
+// ── 종목명 검색 자동완성 ─────────────────────────────
+let _mtSearchTimer = null, _mtDropIdx = -1;
+
+async function onMtSearch(q) {
+  clearTimeout(_mtSearchTimer);
+  const drop = document.getElementById('mt-search-drop');
+  if (!q.trim()) { drop.style.display = 'none'; return; }
+  _mtSearchTimer = setTimeout(async () => {
+    try {
+      let results = [];
+      if (_mtMarket === 'stock') {
+        results = await api(`/api/stocks/search?q=${encodeURIComponent(q)}`);
+      } else {
+        // 코인: 고정 목록에서 필터
+        const COINS = [
+          {code:'KRW-BTC', name:'비트코인'}, {code:'KRW-ETH', name:'이더리움'},
+          {code:'KRW-XRP', name:'리플'}, {code:'KRW-SOL', name:'솔라나'},
+          {code:'KRW-DOGE', name:'도지코인'}, {code:'KRW-ADA', name:'에이다'},
+          {code:'KRW-AVAX', name:'아발란체'}, {code:'KRW-DOT', name:'폴카닷'},
+          {code:'KRW-LINK', name:'체인링크'}, {code:'KRW-MATIC', name:'폴리곤'},
+          {code:'KRW-ATOM', name:'코스모스'}, {code:'KRW-TRX', name:'트론'},
+          {code:'KRW-SHIB', name:'시바이누'}, {code:'KRW-LTC', name:'라이트코인'},
+          {code:'KRW-ETC', name:'이더리움클래식'}, {code:'KRW-BCH', name:'비트코인캐시'},
+          {code:'KRW-NEAR', name:'니어프로토콜'}, {code:'KRW-APT', name:'앱토스'},
+          {code:'KRW-SUI', name:'수이'}, {code:'KRW-OP', name:'옵티미즘'},
+        ];
+        const qL = q.toLowerCase();
+        results = COINS.filter(c => c.name.includes(q) || c.code.toLowerCase().includes(qL))
+                       .map(c => ({code: c.code, name: c.name}));
+      }
+      _mtDropIdx = -1;
+      if (!results.length) { drop.style.display = 'none'; return; }
+      drop.innerHTML = results.map((r, i) =>
+        `<div class="mt-drop-item" data-idx="${i}" data-code="${r.code}" data-name="${r.name}"
+          onclick="selectMtItem('${r.code}','${r.name}')"
+          style="padding:8px 12px;cursor:pointer;font-size:13px;border-bottom:1px solid #21262d;
+                 display:flex;justify-content:space-between;align-items:center">
+          <span>${r.name}</span>
+          <span style="color:#8b949e;font-size:11px">${r.code}</span>
+        </div>`
+      ).join('');
+      drop.style.display = 'block';
+    } catch(e) { drop.style.display = 'none'; }
+  }, 250);
+}
+
+function onMtSearchKey(e) {
+  const drop = document.getElementById('mt-search-drop');
+  const items = drop.querySelectorAll('.mt-drop-item');
+  if (!items.length) return;
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    _mtDropIdx = Math.min(_mtDropIdx + 1, items.length - 1);
+    items.forEach((el, i) => el.style.background = i === _mtDropIdx ? '#21262d' : '');
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    _mtDropIdx = Math.max(_mtDropIdx - 1, 0);
+    items.forEach((el, i) => el.style.background = i === _mtDropIdx ? '#21262d' : '');
+  } else if (e.key === 'Enter' && _mtDropIdx >= 0) {
+    e.preventDefault();
+    const sel = items[_mtDropIdx];
+    selectMtItem(sel.dataset.code, sel.dataset.name);
+  } else if (e.key === 'Escape') {
+    drop.style.display = 'none';
+  }
+}
+
+function selectMtItem(code, name) {
+  document.getElementById('mt-ticker').value = code;
+  document.getElementById('mt-name').value   = name;
+  document.getElementById('mt-search').value = '';
+  document.getElementById('mt-search-drop').style.display = 'none';
+  const sel = document.getElementById('mt-selected');
+  document.getElementById('mt-selected-text').textContent = `${name}  ${code}`;
+  sel.style.display = 'flex';
+  calcMtAmount();
+}
+
+function clearMtSearch() {
+  document.getElementById('mt-ticker').value = '';
+  document.getElementById('mt-name').value   = '';
+  document.getElementById('mt-search').value = '';
+  document.getElementById('mt-selected').style.display = 'none';
+  document.getElementById('mt-amount-display').textContent = '';
+}
+
+// 드롭다운 외부 클릭 시 닫기
+document.addEventListener('click', e => {
+  if (!e.target.closest('#mt-ticker-wrap')) {
+    document.getElementById('mt-search-drop').style.display = 'none';
+  }
+});
 
 async function openManualTrade(ticker='', name='', market='stock', action='BUY') {
   _mtAction = action; _mtMarket = market; _mtPct = 50;
@@ -671,6 +785,15 @@ async function openManualTrade(ticker='', name='', market='stock', action='BUY')
   document.getElementById('mt-amount-display').textContent = '';
   document.getElementById('mt-ticker').value = ticker;
   document.getElementById('mt-name').value   = name;
+  // 검색창 초기화
+  document.getElementById('mt-search').value = '';
+  document.getElementById('mt-search-drop').style.display = 'none';
+  if (ticker && name) {
+    document.getElementById('mt-selected-text').textContent = `${name}  ${ticker}`;
+    document.getElementById('mt-selected').style.display = 'flex';
+  } else {
+    document.getElementById('mt-selected').style.display = 'none';
+  }
   setMtAction(action); setMtMarket(market);
   // 비율 버튼 초기화
   [10,25,50,75,100].forEach(p => {
@@ -797,6 +920,8 @@ function setMtMarket(m) {
   _mtMarket = m;
   document.getElementById('mt-stock-btn').className  = 'btn ' + (m==='stock'  ? 'btn-blue' : 'btn-gray');
   document.getElementById('mt-crypto-btn').className = 'btn ' + (m==='crypto' ? 'btn-blue' : 'btn-gray');
+  // 시장 전환 시 검색 초기화
+  clearMtSearch();
   if (_mtPortfolio) updateMtBalanceInfo();
 }
 
@@ -1419,24 +1544,55 @@ function renderGuide(r) {
 let _manualRefreshAt = 0; // 수동 새로고침 시각 (SSE 덮어쓰기 방지용)
 
 async function refreshAll() {
+  // 새로고침 = 화면 데이터만 갱신 (봇 실행·AI 분석 없음)
   const btn = document.getElementById('refresh-btn');
   if (btn) { btn.innerHTML = '<span class="spinner"></span>갱신 중...'; btn.disabled = true; }
-  try { await refreshStatus(); } catch (e) {}
+
+  // 1. 잔고 (포트폴리오 탭 + 헤더 현금 표시)
   try {
     const p = await api('/api/portfolio');
     _manualRefreshAt = Date.now();
+    _cachedPortfolio = p;
     const s = p.stock || {}, c = p.crypto || {};
     if (s.cash  != null) document.getElementById('stock-cash').textContent  = fmt(s.cash);
     if (c.cash  != null) document.getElementById('crypto-cash').textContent = fmt(c.cash);
     renderHoldings(s, c, p.realized_pl);
   } catch (e) {}
-  try { await loadTradesPage(1); } catch (e) {}
+
+  // 2. 거래내역 현재 페이지 유지
+  try { await loadTradesPage(_tradesPage); } catch (e) {}
+
+  // 3. 봇 상태 배지/버튼만 갱신 (AI 결정 카드는 건드리지 않음)
+  try {
+    const data = await api('/api/status');
+    const cfg = data.config || {};
+    const chips = [
+      { label: '한투증권', ok: cfg.kis_ready },
+      { label: '업비트',   ok: cfg.upbit_ready },
+      { label: 'AI ' + (cfg.ai_provider || ''), ok: cfg.ai_ready },
+    ];
+    document.getElementById('api-status').innerHTML = chips.map(c =>
+      `<span class="chip ${c.ok ? 'chip-ok' : 'chip-err'}">${c.ok ? '✓' : '✗'} ${c.label}</span>`
+    ).join('');
+    const badge = document.getElementById('bot-badge');
+    if (data.running) {
+      badge.className = 'badge badge-green';
+      badge.innerHTML = `<span class="dot dot-green"></span>RUNNING`;
+    } else {
+      badge.className = 'badge badge-red';
+      badge.innerHTML = 'STOPPED';
+    }
+    updateBotButtons(data.running);
+    if (data.last_run) setLastUpdate(data.last_run);
+  } catch (e) {}
+
   if (btn) { btn.innerHTML = '↻ 새로고침'; btn.disabled = false; }
 }
 
 // ───────────────────── 초기화 ─────────────────────
 (async () => {
-  await refreshAll();      // 즉시 상태·잔고·거래 표시
+  await refreshAll();       // 잔고·거래내역·봇 배지
+  try { await refreshStatus(); } catch(e) {}  // 최초 1회: AI 결정 카드 포함 전체 로드
   await loadWatchlist();
   connectStream();
 })();
