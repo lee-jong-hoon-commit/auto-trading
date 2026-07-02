@@ -579,21 +579,22 @@ function renderHoldings(stock, crypto, realizedPl) {
   ];
   const el = document.getElementById('holdings-list');
   if (!list.length) { el.innerHTML = '<div class="empty">보유 없음</div>'; return; }
-  el.innerHTML = `<table>
+  const HC = 'text-align:center;white-space:nowrap';
+  el.innerHTML = `<table style="text-align:center">
     <thead><tr><th>구분</th><th>종목</th><th>수량</th><th>투자금액</th><th>평단가</th><th>현재가</th><th>손익률</th><th>손익금액</th></tr></thead>
     <tbody>${list.map(h => {
       const plCell = h.pl != null
         ? `<span style="color:${h.pl>=0?'#3fb950':'#f85149'}">${h.pl>=0?'+':''}${fmt(h.pl)}</span>`
         : '<span class="gray">-</span>';
       return `<tr>
-        <td><span class="badge badge-${h.cls}">${h.type}</span></td>
-        <td><div style="font-weight:600">${h.name}</div><div class="small">${h.ticker}</div></td>
-        <td class="gray">${Number(h.qty).toLocaleString('ko-KR', { maximumFractionDigits: 4 })}</td>
-        <td style="white-space:nowrap">${fmt(h.invest)}</td>
-        <td style="white-space:nowrap">${fmt(h.avg)}</td>
-        <td style="white-space:nowrap">${fmt(h.current)}</td>
-        <td>${pct(h.rate)}</td>
-        <td style="white-space:nowrap">${plCell}</td>
+        <td style="${HC}"><span class="badge badge-${h.cls}">${h.type}</span></td>
+        <td style="text-align:center"><div style="font-weight:600">${h.name}</div><div class="small gray">${h.ticker}</div></td>
+        <td style="${HC}">${Number(h.qty).toLocaleString('ko-KR', { maximumFractionDigits: 4 })}</td>
+        <td style="${HC}">${fmt(h.invest)}</td>
+        <td style="${HC}">${fmt(h.avg)}</td>
+        <td style="${HC}">${fmt(h.current)}</td>
+        <td style="${HC}">${pct(h.rate)}</td>
+        <td style="${HC}">${plCell}</td>
       </tr>`;
     }).join('')}</tbody>
   </table>`;
@@ -639,7 +640,8 @@ function renderTrades(trades, meta) {
   const el = document.getElementById('trades-table');
   if (!shown) { el.innerHTML = '<div class="empty">거래 내역 없음</div>'; return; }
 
-  el.innerHTML = `<table>
+  const C = 'text-align:center;white-space:nowrap';
+  el.innerHTML = `<table style="text-align:center">
     <thead><tr>
       <th>시각</th><th>구분</th><th>종목</th><th>액션</th>
       <th>수량</th><th>체결가</th><th>평단가</th><th>총금액</th><th>손익</th><th>결과</th>
@@ -665,24 +667,24 @@ function renderTrades(trades, meta) {
         const gain = Math.round((t.price - avgP) * qty);
         const c    = rate >= 0 ? '#3fb950' : '#f85149';
         const sign = rate >= 0 ? '+' : '';
-        plCell = `<span style="color:${c};font-weight:600">${sign}${rate.toFixed(1)}%</span>
-                  <span class="small gray"> (${sign}${gain.toLocaleString('ko-KR')}원)</span>`;
+        plCell = `<span style="color:${c};font-weight:600">${sign}${rate.toFixed(1)}%</span><br>
+                  <span class="small gray">(${sign}${gain.toLocaleString('ko-KR')}원)</span>`;
       } else if (!isSell && t.profit_rate != null) {
         const c = t.profit_rate >= 0 ? '#3fb950' : '#f85149';
         plCell = `<span style="color:${c}">${t.profit_rate >= 0 ? '+' : ''}${t.profit_rate.toFixed(1)}%</span>`;
       }
 
       return `<tr>
-        <td class="small" style="white-space:nowrap">${new Date(t.time).toLocaleString('ko-KR')}</td>
-        <td style="white-space:nowrap"><span class="badge badge-${mClass}">${mType}</span></td>
-        <td style="white-space:nowrap;font-weight:500">${name}</td>
-        <td><span style="color:${aColor};font-weight:600">${lbl}</span></td>
-        <td style="white-space:nowrap;text-align:right">${qty > 0 && qty < 1 ? qty.toFixed(4) : qty}</td>
-        <td style="white-space:nowrap;text-align:right">${fmt(t.price)}</td>
-        <td style="white-space:nowrap;text-align:right">${avgCell}</td>
-        <td style="white-space:nowrap;text-align:right">${fmt(Math.round(amt))}</td>
-        <td style="white-space:nowrap">${plCell}</td>
-        <td class="small" style="white-space:nowrap;color:${ok ? '#3fb950' : '#f85149'}">${ok ? '✓ 성공' : '✗ ' + (t.result?.error?.message || t.result?.msg1 || '실패')}</td>
+        <td class="small" style="${C}">${new Date(t.time).toLocaleString('ko-KR')}</td>
+        <td style="${C}"><span class="badge badge-${mClass}">${mType}</span></td>
+        <td style="${C};font-weight:500">${name}</td>
+        <td style="${C}"><span style="color:${aColor};font-weight:600">${lbl}</span></td>
+        <td style="${C}">${qty > 0 && qty < 1 ? qty.toFixed(4) : qty}</td>
+        <td style="${C}">${fmt(t.price)}</td>
+        <td style="${C}">${avgCell}</td>
+        <td style="${C}">${fmt(Math.round(amt))}</td>
+        <td style="${C}">${plCell}</td>
+        <td class="small" style="${C};color:${ok ? '#3fb950' : '#f85149'}">${ok ? '✓ 성공' : '✗ ' + (t.result?.error?.message || t.result?.msg1 || '실패')}</td>
       </tr>`;
     }).join('')}</tbody>
   </table>`;
