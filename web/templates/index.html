@@ -180,6 +180,7 @@
   <button class="btn btn-red"   onclick="stopBot()">■ 정지</button>
   <button class="btn btn-blue" id="analyze-btn" onclick="runAnalyze()">🤖 AI 분석</button>
   <button class="btn btn-gray" id="refresh-btn" onclick="refreshAll()">↻ 새로고침</button>
+  <button class="btn" style="background:#6e40c9;color:#fff" onclick="openManualTrade()">✋ 수동 매매</button>
   <div class="ctrl-sep"></div>
   <div class="stat-pill"><span class="stat-label">주식</span><span class="stat-val" id="stock-cash">-</span></div>
   <div class="stat-pill"><span class="stat-label">코인</span><span class="stat-val" id="crypto-cash">-</span></div>
@@ -208,12 +209,30 @@
       <div class="market-sum" id="market-summary-text"></div>
     </div>
     <div id="decisions-list"><div class="empty">AI 분석 버튼을 눌러 분석을 시작하세요</div></div>
-    <div id="summaries-section" style="display:none">
-      <div class="small" style="cursor:pointer;padding:4px 0" onclick="toggleSummaries()">
-        <span id="sum-toggle">▶</span> 기술 지표 원문 (AI에게 전달된 데이터)
+  </div>
+
+  <!-- 수동 매매 모달 -->
+  <div id="manual-trade-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:999;align-items:center;justify-content:center">
+    <div style="background:#161b22;border:1px solid #30363d;border-radius:12px;padding:24px;width:min(420px,90vw);box-shadow:0 8px 32px #0008">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+        <div style="font-weight:700;font-size:15px" id="mt-title">수동 매매</div>
+        <button onclick="closeManualTrade()" style="background:none;border:none;color:#8b949e;font-size:18px;cursor:pointer">✕</button>
       </div>
-      <div id="summaries-content" style="display:none;margin-top:8px">
-        <div id="summaries-list"></div>
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <div style="display:flex;gap:8px">
+          <button id="mt-buy-btn"  onclick="setMtAction('BUY')"  class="btn btn-green" style="flex:1">매수</button>
+          <button id="mt-sell-btn" onclick="setMtAction('SELL')" class="btn btn-gray"  style="flex:1">매도</button>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button id="mt-stock-btn"  onclick="setMtMarket('stock')"  class="btn btn-blue" style="flex:1">주식</button>
+          <button id="mt-crypto-btn" onclick="setMtMarket('crypto')" class="btn btn-gray" style="flex:1">코인</button>
+        </div>
+        <input id="mt-ticker" class="inp" placeholder="종목코드 (예: 005930 / KRW-BTC)" style="width:100%;box-sizing:border-box">
+        <input id="mt-name"   class="inp" placeholder="종목명 (선택)" style="width:100%;box-sizing:border-box">
+        <input id="mt-amount" class="inp" placeholder="투자금액 (원)" type="number" style="width:100%;box-sizing:border-box">
+        <div class="small gray">※ 금액 미입력 시 주문가능금액의 50% 자동 적용</div>
+        <button onclick="submitManualTrade()" class="btn btn-green" style="width:100%;padding:10px;font-size:14px;font-weight:600">주문 실행</button>
+        <div id="mt-result" style="display:none;padding:10px;border-radius:6px;font-size:13px"></div>
       </div>
     </div>
   </div>
@@ -473,32 +492,90 @@ function setLastUpdate(iso) {
 }
 
 // ───────────────────── 결정 카드 ─────────────────────
+// 5전략 라벨 색상
+const STRATEGY_COLORS = {
+  '추세추종': '#58a6ff', '모멘텀': '#f0883e', '평균회귀': '#bc8cff',
+  '돌파전략': '#3fb950', '거래량분석': '#e3b341',
+};
+
+function _parseStrategies(text) {
+  if (!text) return [];
+  return text.split('\n').filter(l => l.startsWith('▶')).map(l => {
+    const m = l.match(/^▶\s*([^:]+):\s*(.+)$/);
+    return m ? { label: m[1].trim(), content: m[2].trim() } : null;
+  }).filter(Boolean);
+}
+
+function toggleIndicator(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const open = el.style.display !== 'none';
+  el.style.display = open ? 'none' : 'block';
+  const btn = document.getElementById('btn-' + id);
+  if (btn) btn.textContent = open ? '📊 지표 분석 ▼' : '📊 지표 분석 ▲';
+}
+
 function renderDecisions(decisions, summary, lastRun, summaries) {
   if (summary) {
     document.getElementById('market-summary-wrap').style.display = 'block';
     document.getElementById('market-summary-text').textContent = summary;
   }
   if (lastRun) setLastUpdate(lastRun);
-  if (summaries?.length) {
-    document.getElementById('summaries-section').style.display = 'block';
-    document.getElementById('summaries-list').innerHTML = summaries.map(s =>
-      `<div class="sum-block">${s}</div>`).join('');
-  }
   if (!decisions?.length) return;
+
+  // summaries를 종목명/ticker 기준으로 매핑
+  const sumMap = {};
+  (summaries || []).forEach(s => {
+    const m = s.match(/^\[([^\]]+)\]/);
+    if (m) sumMap[m[1].trim()] = s;
+  });
 
   const sorted = [...decisions].sort((a, b) => {
     const o = { BUY: 0, SELL: 1, HOLD: 2 };
     return (o[a.action] ?? 2) - (o[b.action] ?? 2) || b.confidence - a.confidence;
   });
 
-  document.getElementById('decisions-list').innerHTML = `<div class="decision-grid">` + sorted.map(d => {
-    const c = d.action === 'BUY' ? '#3fb950' : d.action === 'SELL' ? '#f85149' : '#8b949e';
+  const market = t => t?.startsWith('KRW-') ? 'crypto' : 'stock';
+
+  document.getElementById('decisions-list').innerHTML = `<div class="decision-grid">` + sorted.map((d, i) => {
+    const c   = d.action === 'BUY' ? '#3fb950' : d.action === 'SELL' ? '#f85149' : '#8b949e';
     const pct = Math.round(d.confidence * 100);
     const lbl = d.action === 'BUY' ? '매수' : d.action === 'SELL' ? '매도' : '관망';
+    const name = d.name || d.ticker;
+    const mkt  = market(d.ticker);
+
+    // 5전략 지표 블록
+    const sumText   = sumMap[name] || sumMap[d.ticker] || '';
+    const strategies = _parseStrategies(sumText);
+    const indicId   = `ind-${i}`;
+    const indHtml   = strategies.length ? `
+      <button id="btn-${indicId}" onclick="toggleIndicator('${indicId}')"
+        style="margin-top:8px;background:none;border:1px solid #30363d;color:#8b949e;
+               border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;width:100%">
+        📊 지표 분석 ▼
+      </button>
+      <div id="${indicId}" style="display:none;margin-top:8px;display:none">
+        ${strategies.map(s => {
+          const sc = STRATEGY_COLORS[s.label] || '#8b949e';
+          return `<div style="margin-bottom:6px">
+            <div style="font-size:10px;font-weight:700;color:${sc};margin-bottom:2px">▶ ${s.label}</div>
+            <div style="font-size:11px;color:#c9d1d9;line-height:1.6;word-break:break-all">${s.content.replace(/\|/g,'<br>')}</div>
+          </div>`;
+        }).join('')}
+      </div>` : '';
+
+    // 수동매매 버튼 (BUY/SELL 종목만)
+    const tradeHtml = d.action !== 'HOLD' ? `
+      <button onclick="openManualTrade('${d.ticker}','${name}','${mkt}','${d.action}')"
+        style="margin-top:6px;width:100%;padding:5px;border-radius:6px;border:none;cursor:pointer;
+               font-size:12px;font-weight:600;background:${c}22;color:${c}">
+        ✋ 수동 ${lbl}
+      </button>` : '';
+
     return `<div class="dcard ${d.action.toLowerCase()}">
       <div class="dcard-header">
         <div>
-          <div class="dcard-name">${d.name || d.ticker}</div>
+          <div class="dcard-name">${name}</div>
           <div class="dcard-ticker">${d.ticker || ''}</div>
         </div>
         <span class="badge" style="background:${c}22;color:${c}">${lbl}</span>
@@ -506,17 +583,69 @@ function renderDecisions(decisions, summary, lastRun, summaries) {
       <div class="dcard-reason">${d.reason}</div>
       <div class="conf-bar"><div class="conf-fill" style="width:${pct}%;background:${c}"></div></div>
       <div class="conf-lbl"><span>신뢰도</span><span style="color:${c};font-weight:600">${pct}%</span></div>
+      ${indHtml}${tradeHtml}
     </div>`;
   }).join('') + `</div>`;
 }
 
-function toggleSummaries() {
-  const c = document.getElementById('summaries-content');
-  const t = document.getElementById('sum-toggle');
-  const open = c.style.display === 'none';
-  c.style.display = open ? 'block' : 'none';
-  t.textContent = open ? '▼' : '▶';
+// ───────────────────── 수동 매매 ─────────────────────
+let _mtAction = 'BUY', _mtMarket = 'stock';
+
+function openManualTrade(ticker='', name='', market='stock', action='BUY') {
+  _mtAction = action; _mtMarket = market;
+  document.getElementById('mt-ticker').value = ticker;
+  document.getElementById('mt-name').value   = name;
+  document.getElementById('mt-amount').value = '';
+  document.getElementById('mt-result').style.display = 'none';
+  setMtAction(action); setMtMarket(market);
+  document.getElementById('manual-trade-modal').style.display = 'flex';
 }
+function closeManualTrade() {
+  document.getElementById('manual-trade-modal').style.display = 'none';
+}
+function setMtAction(a) {
+  _mtAction = a;
+  document.getElementById('mt-buy-btn').className  = 'btn ' + (a==='BUY'  ? 'btn-green' : 'btn-gray');
+  document.getElementById('mt-sell-btn').className = 'btn ' + (a==='SELL' ? 'btn-red'   : 'btn-gray');
+}
+function setMtMarket(m) {
+  _mtMarket = m;
+  document.getElementById('mt-stock-btn').className  = 'btn ' + (m==='stock'  ? 'btn-blue'   : 'btn-gray');
+  document.getElementById('mt-crypto-btn').className = 'btn ' + (m==='crypto' ? 'btn-yellow' : 'btn-gray');
+}
+async function submitManualTrade() {
+  const ticker = document.getElementById('mt-ticker').value.trim();
+  const name   = document.getElementById('mt-name').value.trim() || ticker;
+  const amount = parseFloat(document.getElementById('mt-amount').value) || null;
+  if (!ticker) { alert('종목코드를 입력하세요'); return; }
+
+  const resEl = document.getElementById('mt-result');
+  resEl.style.display = 'block';
+  resEl.style.background = '#21262d';
+  resEl.style.color = '#c9d1d9';
+  resEl.textContent = '주문 처리 중...';
+
+  try {
+    const r = await postJson('/api/manual-trade', {
+      market: _mtMarket, ticker, name, action: _mtAction, amount_krw: amount
+    });
+    const ok = r.status === 'executed';
+    resEl.style.background = ok ? '#0d1f12' : '#1f0d0d';
+    resEl.style.color      = ok ? '#3fb950' : '#f85149';
+    if (ok) {
+      const qty = r.qty || (r.amount_krw / r.price).toFixed(4);
+      resEl.textContent = `✓ ${_mtAction === 'BUY' ? '매수' : '매도'} 완료 — ${qty} @ ${Number(r.price).toLocaleString('ko-KR')}원`;
+      setTimeout(() => { closeManualTrade(); loadTradesPage(1); refreshAll(); }, 1500);
+    } else {
+      resEl.textContent = `✗ ${r.error || r.reason || '주문 실패'}`;
+    }
+  } catch(e) {
+    resEl.style.background = '#1f0d0d'; resEl.style.color = '#f85149';
+    resEl.textContent = '✗ 네트워크 오류';
+  }
+}
+// ESC로 모달 닫기
+document.addEventListener('keydown', e => { if(e.key==='Escape') closeManualTrade(); });
 
 // ───────────────────── 포트폴리오 ─────────────────────
 function renderAssetSummary(stock, crypto, realizedPl) {

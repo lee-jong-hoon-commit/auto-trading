@@ -3,7 +3,7 @@ import os
 import asyncio
 import json
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from pathlib import Path
@@ -395,6 +395,35 @@ async def portfolio():
         except Exception as e:
             result["crypto"] = {"error": str(e)}
     return result
+
+
+# ---- 수동 매매 ----
+@app.post("/api/manual-trade")
+async def manual_trade(request: Request):
+    if UI_ONLY:
+        return {"status": "skipped", "reason": "UI 전용 모드에서는 실제 거래 불가"}
+    body = await request.json()
+    market     = body.get("market", "stock")   # stock | crypto
+    ticker     = body.get("ticker", "")
+    name       = body.get("name", ticker)
+    action     = body.get("action", "BUY").upper()
+    amount_krw = body.get("amount_krw")
+    try:
+        if market == "stock":
+            from trader import kis_client
+            portfolio = await asyncio.to_thread(kis_client.get_balance)
+            result = await asyncio.to_thread(
+                executor.execute_stock, ticker, name, action, 1.0, "수동 매매", portfolio, amount_krw
+            )
+        else:
+            from trader import upbit_client
+            portfolio = await asyncio.to_thread(upbit_client.get_balance)
+            result = await asyncio.to_thread(
+                executor.execute_crypto, ticker, action, 1.0, "수동 매매", portfolio, amount_krw
+            )
+        return result
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
 
 
 # ---- 관심종목(워치리스트) 관리 ----
