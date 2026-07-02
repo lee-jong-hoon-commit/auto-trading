@@ -1,11 +1,14 @@
 """한국투자증권 KIS OpenAPI 클라이언트"""
 import json
+import logging
 import time
 import requests
 import pandas as pd
 from datetime import datetime, timedelta
 from pathlib import Path
 from config import config
+
+logger = logging.getLogger(__name__)
 
 
 TOKEN_CACHE = Path(__file__).parent.parent / "data" / "kis_token.json"
@@ -220,6 +223,33 @@ def _headers(tr_id: str) -> dict:
     }
 
 
+def _get_orderable_cash(acct: str, suffix: str) -> int:
+    """inquire-psbl-order로 실제 주문가능현금 조회.
+    inquire-balance output2에는 ord_psbl_cash 필드가 없으므로 별도 호출 필요."""
+    try:
+        tr_id = "VTTC8908R" if config.KIS_MOCK else "TTTC8908R"
+        resp = requests.get(
+            f"{config.KIS_BASE_URL}/uapi/domestic-stock/v1/trading/inquire-psbl-order",
+            headers=_headers(tr_id),
+            params={
+                "CANO": acct,
+                "ACNT_PRDT_CD": suffix,
+                "PDNO": "005930",       # 삼성전자 — 종목 무관하게 현금 조회용
+                "ORD_UNPR": "0",
+                "ORD_DVSN": "01",       # 시장가
+                "CMA_EVLU_AMT_ICLD_YN": "N",
+                "OVRS_ICLD_YN": "N",
+            },
+            timeout=10,
+        )
+        resp.raise_for_status()
+        out = resp.json().get("output", {})
+        return int(out.get("ord_psbl_cash", 0))
+    except Exception as e:
+        logger.warning(f"주문가능현금 조회 실패 (inquire-psbl-order): {e}")
+        return 0
+
+
 def get_balance() -> dict:
     """계좌 잔고 조회 (500 에러 시 최대 2회 재시도)"""
     acct, suffix = config.KIS_ACCOUNT_NO.split("-")
@@ -250,9 +280,13 @@ def get_balance() -> dict:
         break
     data = resp.json()
     o2 = data["output2"][0] if data.get("output2") else {}
+
+    # inquire-psbl-order로 실제 주문가능현금 조회 (inquire-balance output2엔 ord_psbl_cash 없음)
+    orderable_cash = _get_orderable_cash(acct, suffix)
+
     return {
         "cash":            int(o2.get("dnca_tot_amt", 0)),
-        "orderable_cash":  int(o2.get("ord_psbl_cash", 0)),        # 실제 주문가능금액 (이걸로 상한 계산)
+        "orderable_cash":  orderable_cash,                         # 실제 주문가능금액
         "settlement_cash": int(o2.get("prvs_rcdl_excc_amt", 0)),  # T+2 정산 후 출금 가능
         "total":           int(o2.get("tot_evlu_amt", 0)),         # 현금 + 주식 평가 합계
         "unrealized_pl":   int(o2.get("evlu_pfls_smtl_amt", 0)),  # 미실현 손익 합계
