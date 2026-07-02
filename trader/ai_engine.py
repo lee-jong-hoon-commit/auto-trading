@@ -140,20 +140,40 @@ def _chat(messages: list[dict], max_tokens: int = 4096, force_json: bool = True)
         return None
 
 
-def _validate_decisions(decisions: list[dict], stock_summaries: list[str], crypto_summaries: list[str]) -> list[dict]:
-    """AI 응답의 ticker가 올바른 시장(주식/코인)에 속하는지 검증."""
+def _validate_decisions(decisions: list[dict], stock_summaries: list[str], crypto_summaries: list[str],
+                        portfolio_status: dict | None = None) -> list[dict]:
+    """AI 응답 검증: 시장 분류 + SELL은 보유 종목에만 허용."""
     has_stocks = bool(stock_summaries)
     has_crypto = bool(crypto_summaries)
+
+    # 보유 종목 코드 세트 (SELL 필터용)
+    held_stocks  = {h["code"]   for h in (portfolio_status or {}).get("stock_holdings",  [])} if portfolio_status else set()
+    held_cryptos = {h["ticker"] for h in (portfolio_status or {}).get("crypto_holdings", [])} if portfolio_status else set()
+
     valid = []
     for d in decisions:
-        ticker = d.get("ticker", "")
+        ticker    = d.get("ticker", "")
+        action    = d.get("action", "HOLD")
         is_crypto = ticker.upper().startswith("KRW-")
-        if is_crypto and has_crypto:
-            valid.append(d)
-        elif not is_crypto and has_stocks and re.match(r"^\d{5,6}$", ticker):
-            valid.append(d)
-        else:
-            logger.debug(f"잘못된 ticker 제거: {ticker} (is_crypto={is_crypto}, has_stocks={has_stocks}, has_crypto={has_crypto})")
+
+        # 시장 분류 검증
+        if is_crypto and not has_crypto:
+            logger.debug(f"코인 ticker 제거 (코인 데이터 없음): {ticker}")
+            continue
+        if not is_crypto and (not has_stocks or not re.match(r"^\d{5,6}$", ticker)):
+            logger.debug(f"잘못된 ticker 제거: {ticker}")
+            continue
+
+        # SELL은 실제 보유 종목에만 허용
+        if action == "SELL" and portfolio_status:
+            if is_crypto and ticker not in held_cryptos:
+                logger.info(f"SELL 제거 (미보유 코인): {ticker}")
+                continue
+            if not is_crypto and ticker not in held_stocks:
+                logger.info(f"SELL 제거 (미보유 주식): {ticker} — 보유: {held_stocks}")
+                continue
+
+        valid.append(d)
     return valid
 
 
@@ -194,7 +214,7 @@ def analyze_and_decide(
         result = json.loads(text)
         result.setdefault("decisions", [])
         result.setdefault("market_summary", "")
-        result["decisions"] = _validate_decisions(result["decisions"], stock_summaries, crypto_summaries)
+        result["decisions"] = _validate_decisions(result["decisions"], stock_summaries, crypto_summaries, portfolio_status)
         return result
     except json.JSONDecodeError:
         logger.warning(f"AI JSON 파싱 실패, 부분 추출 시도. 응답 앞부분: {text[:200]}")
@@ -206,7 +226,7 @@ def analyze_and_decide(
         if match_d:
             try:
                 decisions = _validate_decisions(
-                    json.loads(match_d.group(1)), stock_summaries, crypto_summaries
+                    json.loads(match_d.group(1)), stock_summaries, crypto_summaries, portfolio_status
                 )
             except json.JSONDecodeError:
                 pass
