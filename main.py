@@ -18,17 +18,22 @@ from rich.live import Live
 from rich.layout import Layout
 from rich.text import Text
 from rich import box
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from config import config
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    handlers=[
-        logging.FileHandler("logs/auto_trader.log", encoding="utf-8"),
-        logging.StreamHandler(),
-    ],
-)
+# 로그 타임스탬프를 KST로 고정 (서버가 UTC여도 한국시간으로 출력)
+class _KSTFormatter(logging.Formatter):
+    _KST = timezone(timedelta(hours=9))
+    def formatTime(self, record, datefmt=None):
+        dt = datetime.fromtimestamp(record.created, self._KST)
+        return dt.strftime(datefmt or "%Y-%m-%d %H:%M:%S")
+
+_fmt = _KSTFormatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+_fh  = logging.FileHandler("logs/auto_trader.log", encoding="utf-8")
+_sh  = logging.StreamHandler()
+_fh.setFormatter(_fmt)
+_sh.setFormatter(_fmt)
+logging.basicConfig(level=logging.INFO, handlers=[_fh, _sh])
 
 console = Console()
 

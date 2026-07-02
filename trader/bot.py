@@ -44,7 +44,7 @@ def _log(msg: str, level: str = "info"):
         logger.warning(msg)
     else:
         logger.info(msg)
-    _state["activity_log"].append({"time": datetime.now().isoformat(), "msg": msg, "level": level})
+    _state["activity_log"].append({"time": datetime.now(KST).isoformat(), "msg": msg, "level": level})
     if len(_state["activity_log"]) > 200:
         _state["activity_log"] = _state["activity_log"][-200:]
 
@@ -239,7 +239,7 @@ async def run_cycle():
                 _log(f"✗ 오류: {name} — {result.get('error', '')}", "error")
 
         _state["last_trades"] = executed
-        _state["last_run"] = datetime.now().isoformat()
+        _state["last_run"] = datetime.now(KST).isoformat()
         _log(f"=== 사이클 완료: {len(executed)}건 체결 ===")
 
     except Exception as e:

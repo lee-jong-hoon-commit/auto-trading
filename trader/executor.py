@@ -1,7 +1,9 @@
 """매매 실행 + 거래 기록 관리"""
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
+
+KST = timezone(timedelta(hours=9))
 from pathlib import Path
 from config import config
 from trader import kis_client, upbit_client
@@ -69,7 +71,7 @@ def execute_stock(code: str, name: str, action: str, confidence: float, reason: 
             result["error"] = {"message": err_msg, "rt_cd": result.get("rt_cd")}
 
         record = {
-            "time": datetime.now().isoformat(),
+            "time": datetime.now(KST).isoformat(),
             "market": "stock",
             "code": code,
             "name": name,
@@ -124,7 +126,7 @@ def execute_crypto(ticker: str, action: str, confidence: float, reason: str,
                 return {"status": "skipped", "reason": f"매수금액 부족 ({amount:,.0f}원 < 최소 {config.UPBIT_MIN_ORDER_KRW:,}원)"}
             result = upbit_client.place_order(ticker, "buy", amount_krw=amount)
             record = {
-                "time": datetime.now().isoformat(),
+                "time": datetime.now(KST).isoformat(),
                 "market": "crypto",
                 "ticker": ticker,
                 "action": "BUY",
@@ -145,7 +147,7 @@ def execute_crypto(ticker: str, action: str, confidence: float, reason: str,
                 return {"status": "skipped", "reason": f"매도 금액 부족 ({sell_value:.0f}원, 최소 {config.UPBIT_MIN_ORDER_KRW:,}원)"}
             result = upbit_client.place_order(ticker, "sell", qty=qty)
             record = {
-                "time": datetime.now().isoformat(),
+                "time": datetime.now(KST).isoformat(),
                 "market": "crypto",
                 "ticker": ticker,
                 "action": "SELL",
