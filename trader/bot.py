@@ -188,7 +188,8 @@ async def run_cycle():
         _log(f"지표 계산 완료 — 주식 {len(stock_summaries)}개, 코인 {len(crypto_summaries)}개")
 
         # 4. AI 의사결정
-        _log(f"AI 분석 요청 중 ({config.AI_PROVIDER})...")
+        _model = {"gemini": config.GEMINI_MODEL, "anthropic": config.ANTHROPIC_MODEL, "ollama": config.OLLAMA_MODEL}.get(config.AI_PROVIDER, config.AI_PROVIDER)
+        _log(f"AI 분석 요청 중 ({config.AI_PROVIDER} / {_model})...")
         portfolio_status = {
             "stock_cash": stock_cash,
             "crypto_cash": crypto_cash,
