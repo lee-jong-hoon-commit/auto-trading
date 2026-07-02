@@ -27,7 +27,7 @@ def _save_trade(record: dict):
 
 
 def execute_stock(code: str, name: str, action: str, confidence: float, reason: str,
-                  portfolio: dict, amount_krw: float = None) -> dict:
+                  portfolio: dict, amount_krw: float = None, manual_qty: int = None) -> dict:
     """주식 매매 실행"""
     if action == "HOLD":
         return {"status": "skipped", "reason": "HOLD 결정"}
@@ -57,7 +57,8 @@ def execute_stock(code: str, name: str, action: str, confidence: float, reason: 
             holding = next((h for h in portfolio.get("holdings", []) if h["code"] == code), None)
             if not holding:
                 return {"status": "skipped", "reason": "보유 종목 없음"}
-            qty = holding["qty"]
+            # 수동 매매 시 명시적 수량 지정 가능 (비율 계산 결과), 없으면 전량 매도
+            qty = int(manual_qty) if manual_qty and int(manual_qty) <= holding["qty"] else holding["qty"]
             avg_price = holding.get("avg_price", 0)
             result = kis_client.place_order(code, qty, int(current_price), "sell")
 
@@ -105,7 +106,7 @@ def execute_stock(code: str, name: str, action: str, confidence: float, reason: 
 
 
 def execute_crypto(ticker: str, action: str, confidence: float, reason: str,
-                   portfolio: dict, amount_krw: float = None) -> dict:
+                   portfolio: dict, amount_krw: float = None, manual_qty: float = None) -> dict:
     """코인 매매 실행"""
     if action == "HOLD":
         return {"status": "skipped", "reason": "HOLD 결정"}
@@ -143,7 +144,8 @@ def execute_crypto(ticker: str, action: str, confidence: float, reason: str,
             holding = next((h for h in portfolio.get("holdings", []) if h["ticker"] == ticker), None)
             if not holding:
                 return {"status": "skipped", "reason": "보유 코인 없음"}
-            qty = holding["qty"]
+            # 수동 매매 시 명시적 수량 지정 가능, 없으면 전량
+            qty = float(manual_qty) if manual_qty and float(manual_qty) <= holding["qty"] else holding["qty"]
             sell_value = current_price * qty
             if sell_value < config.UPBIT_MIN_ORDER_KRW:
                 return {"status": "skipped", "reason": f"매도 금액 부족 ({sell_value:.0f}원, 최소 {config.UPBIT_MIN_ORDER_KRW:,}원)"}

@@ -49,6 +49,7 @@ def get_balance() -> dict:
                     "qty": qty,
                     "avg_price": avg,
                     "current_price": current,
+                    "eval_amount": int(value),
                     "value": value,
                     "profit_rate": profit_rate,
                 })

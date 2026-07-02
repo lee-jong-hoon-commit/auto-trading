@@ -363,11 +363,11 @@ async def portfolio():
     if UI_ONLY:
         return {
             "stock": {
-                "cash": 100002, "settlement_cash": 85000,
+                "cash": 100002, "orderable_cash": 92000, "settlement_cash": 85000,
                 "total": 519002, "unrealized_pl": 18400,
                 "holdings": [
-                    {"code": "005930", "name": "삼성전자", "qty": 1, "avg_price": 72000.0,
-                     "current_price": 75000.0, "eval_amount": 75000, "pl_amount": 3000, "profit_rate": 4.17},
+                    {"code": "005930", "name": "삼성전자", "qty": 3, "avg_price": 72000.0,
+                     "current_price": 75000.0, "eval_amount": 225000, "pl_amount": 9000, "profit_rate": 4.17},
                     {"code": "035420", "name": "네이버",   "qty": 2, "avg_price": 180000.0,
                      "current_price": 192000.0, "eval_amount": 384000, "pl_amount": 24000, "profit_rate": 6.67},
                 ],
@@ -375,9 +375,12 @@ async def portfolio():
             "crypto": {
                 "cash": 12345, "total": 87600,
                 "holdings": [
-                    {"ticker": "KRW-BTC", "qty": 0.0008, "avg_price": 87000000.0, "current_price": 91000000.0, "profit_rate": 4.60},
-                    {"ticker": "KRW-ETH", "qty": 0.012,  "avg_price": 3200000.0,  "current_price": 3450000.0,  "profit_rate": 7.81},
-                    {"ticker": "KRW-SOL", "qty": 0.45,   "avg_price": 110000.0,   "current_price": 115000.0,   "profit_rate": 4.55},
+                    {"ticker": "KRW-BTC", "qty": 0.0008, "avg_price": 87000000.0, "current_price": 91000000.0,
+                     "eval_amount": 72800, "profit_rate": 4.60},
+                    {"ticker": "KRW-ETH", "qty": 0.012,  "avg_price": 3200000.0,  "current_price": 3450000.0,
+                     "eval_amount": 41400, "profit_rate": 7.81},
+                    {"ticker": "KRW-SOL", "qty": 0.45,   "avg_price": 110000.0,   "current_price": 115000.0,
+                     "eval_amount": 51750, "profit_rate": 4.55},
                 ],
             },
             "realized_pl": realized,
@@ -408,18 +411,19 @@ async def manual_trade(request: Request):
     name       = body.get("name", ticker)
     action     = body.get("action", "BUY").upper()
     amount_krw = body.get("amount_krw")
+    manual_qty = body.get("qty")               # 명시적 수량 (매도 비율 계산 시)
     try:
         if market == "stock":
             from trader import kis_client
             portfolio = await asyncio.to_thread(kis_client.get_balance)
             result = await asyncio.to_thread(
-                executor.execute_stock, ticker, name, action, 1.0, "수동 매매", portfolio, amount_krw
+                executor.execute_stock, ticker, name, action, 1.0, "수동 매매", portfolio, amount_krw, manual_qty
             )
         else:
             from trader import upbit_client
             portfolio = await asyncio.to_thread(upbit_client.get_balance)
             result = await asyncio.to_thread(
-                executor.execute_crypto, ticker, action, 1.0, "수동 매매", portfolio, amount_krw
+                executor.execute_crypto, ticker, action, 1.0, "수동 매매", portfolio, amount_krw, manual_qty
             )
         return result
     except Exception as e:

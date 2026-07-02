@@ -219,19 +219,50 @@
         <button onclick="closeManualTrade()" style="background:none;border:none;color:#8b949e;font-size:18px;cursor:pointer">✕</button>
       </div>
       <div style="display:flex;flex-direction:column;gap:10px">
+        <!-- 매수/매도 선택 -->
         <div style="display:flex;gap:8px">
-          <button id="mt-buy-btn"  onclick="setMtAction('BUY')"  class="btn btn-green" style="flex:1">매수</button>
-          <button id="mt-sell-btn" onclick="setMtAction('SELL')" class="btn btn-gray"  style="flex:1">매도</button>
+          <button id="mt-buy-btn"  onclick="setMtAction('BUY')"  class="btn btn-green" style="flex:1;padding:10px;font-size:14px">매수</button>
+          <button id="mt-sell-btn" onclick="setMtAction('SELL')" class="btn btn-gray"  style="flex:1;padding:10px;font-size:14px">매도</button>
         </div>
+        <!-- 주식/코인 선택 -->
         <div style="display:flex;gap:8px">
           <button id="mt-stock-btn"  onclick="setMtMarket('stock')"  class="btn btn-blue" style="flex:1">주식</button>
           <button id="mt-crypto-btn" onclick="setMtMarket('crypto')" class="btn btn-gray" style="flex:1">코인</button>
         </div>
-        <input id="mt-ticker" class="inp" placeholder="종목코드 (예: 005930 / KRW-BTC)" style="width:100%;box-sizing:border-box">
-        <input id="mt-name"   class="inp" placeholder="종목명 (선택)" style="width:100%;box-sizing:border-box">
-        <input id="mt-amount" class="inp" placeholder="투자금액 (원)" type="number" style="width:100%;box-sizing:border-box">
-        <div class="small gray">※ 금액 미입력 시 주문가능금액의 50% 자동 적용</div>
-        <button onclick="submitManualTrade()" class="btn btn-green" style="width:100%;padding:10px;font-size:14px;font-weight:600">주문 실행</button>
+
+        <!-- 현금 / 보유현황 정보 -->
+        <div id="mt-balance-info" style="background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:10px;font-size:13px">
+          <div class="small gray" style="margin-bottom:6px">잔고 정보 로딩 중...</div>
+        </div>
+
+        <!-- 매도 시: 보유 종목 선택 -->
+        <div id="mt-holdings-wrap" style="display:none">
+          <div class="small gray" style="margin-bottom:4px">보유 종목 선택</div>
+          <select id="mt-holding-select" class="inp" style="width:100%;box-sizing:border-box" onchange="onMtHoldingSelect()">
+            <option value="">-- 종목 선택 --</option>
+          </select>
+        </div>
+
+        <!-- 매수 시: 종목 코드 직접 입력 -->
+        <div id="mt-ticker-wrap">
+          <input id="mt-ticker" class="inp" placeholder="종목코드 (예: 005930 / KRW-BTC)" style="width:100%;box-sizing:border-box">
+          <input id="mt-name"   class="inp" placeholder="종목명 (선택)" style="width:100%;box-sizing:border-box;margin-top:6px">
+        </div>
+
+        <!-- 비율 선택 -->
+        <div>
+          <div class="small gray" style="margin-bottom:6px" id="mt-pct-label">투자 비율</div>
+          <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:4px">
+            <button class="btn btn-gray" onclick="setMtPct(10)"  id="mt-pct-10"  style="font-size:12px;padding:6px 0">10%</button>
+            <button class="btn btn-gray" onclick="setMtPct(25)"  id="mt-pct-25"  style="font-size:12px;padding:6px 0">25%</button>
+            <button class="btn btn-gray" onclick="setMtPct(50)"  id="mt-pct-50"  style="font-size:12px;padding:6px 0">50%</button>
+            <button class="btn btn-gray" onclick="setMtPct(75)"  id="mt-pct-75"  style="font-size:12px;padding:6px 0">75%</button>
+            <button class="btn btn-gray" onclick="setMtPct(100)" id="mt-pct-100" style="font-size:12px;padding:6px 0">전체</button>
+          </div>
+          <div id="mt-amount-display" style="margin-top:8px;text-align:center;font-size:13px;color:#c9d1d9;min-height:20px"></div>
+        </div>
+
+        <button onclick="submitManualTrade()" id="mt-submit-btn" class="btn btn-green" style="width:100%;padding:10px;font-size:14px;font-weight:600">주문 실행</button>
         <div id="mt-result" style="display:none;padding:10px;border-radius:6px;font-size:13px"></div>
       </div>
     </div>
@@ -589,53 +620,180 @@ function renderDecisions(decisions, summary, lastRun, summaries) {
 }
 
 // ───────────────────── 수동 매매 ─────────────────────
-let _mtAction = 'BUY', _mtMarket = 'stock';
+let _mtAction = 'BUY', _mtMarket = 'stock', _mtPct = 50;
+let _mtPortfolio = null;   // { stock: {...}, crypto: {...} }
 
-function openManualTrade(ticker='', name='', market='stock', action='BUY') {
-  _mtAction = action; _mtMarket = market;
+async function openManualTrade(ticker='', name='', market='stock', action='BUY') {
+  _mtAction = action; _mtMarket = market; _mtPct = 50;
+  document.getElementById('mt-result').style.display = 'none';
+  document.getElementById('mt-amount-display').textContent = '';
   document.getElementById('mt-ticker').value = ticker;
   document.getElementById('mt-name').value   = name;
-  document.getElementById('mt-amount').value = '';
-  document.getElementById('mt-result').style.display = 'none';
   setMtAction(action); setMtMarket(market);
+  // 비율 버튼 초기화
+  [10,25,50,75,100].forEach(p => {
+    document.getElementById('mt-pct-'+p).className = 'btn ' + (p===50?'btn-blue':'btn-gray');
+  });
   document.getElementById('manual-trade-modal').style.display = 'flex';
+  // 잔고 로드
+  document.getElementById('mt-balance-info').innerHTML = '<div class="small gray">잔고 정보 로딩 중...</div>';
+  try {
+    _mtPortfolio = await api('/api/portfolio');
+    updateMtBalanceInfo();
+  } catch(e) {
+    document.getElementById('mt-balance-info').innerHTML = '<div class="small" style="color:#f85149">잔고 조회 실패</div>';
+  }
 }
+
+function updateMtBalanceInfo() {
+  if (!_mtPortfolio) return;
+  const s = _mtPortfolio.stock  || {};
+  const c = _mtPortfolio.crypto || {};
+  const infoEl   = document.getElementById('mt-balance-info');
+  const holdWrap = document.getElementById('mt-holdings-wrap');
+  const tickWrap = document.getElementById('mt-ticker-wrap');
+  const pctLabel = document.getElementById('mt-pct-label');
+
+  if (_mtAction === 'BUY') {
+    // 매수: 현금 표시
+    holdWrap.style.display = 'none';
+    tickWrap.style.display = 'block';
+    const cash      = _mtMarket === 'stock' ? (s.orderable_cash || s.cash || 0) : (c.cash || 0);
+    const cashLabel = _mtMarket === 'stock' ? '주문가능금액' : '코인 잔고';
+    infoEl.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center">
+      <span class="small gray">${cashLabel}</span>
+      <span style="font-weight:700;color:#3fb950">${fmt(cash)}</span>
+    </div>`;
+    pctLabel.textContent = '투자 비율 (주문가능금액 기준)';
+    calcMtAmount();
+
+  } else {
+    // 매도: 보유 종목 드롭다운
+    tickWrap.style.display = 'none';
+    holdWrap.style.display = 'block';
+    pctLabel.textContent = '매도 비율 (보유수량 기준)';
+
+    const holdings = _mtMarket === 'stock'
+      ? (s.holdings || []).map(h => ({ ticker: h.code, name: h.name, qty: h.qty, price: h.current_price, eval: h.eval_amount || Math.round(h.qty * h.current_price) }))
+      : (c.holdings || []).filter(h => h.qty > 0).map(h => ({ ticker: h.ticker, name: h.ticker, qty: h.qty, price: h.current_price, eval: Math.round(h.qty * h.current_price) }));
+
+    const sel = document.getElementById('mt-holding-select');
+    sel.innerHTML = '<option value="">-- 종목 선택 --</option>' +
+      holdings.map(h => `<option value="${h.ticker}" data-qty="${h.qty}" data-price="${h.price}" data-name="${h.name}" data-eval="${h.eval}">
+        ${h.name} (${h.qty > 1 ? h.qty+'주' : h.qty.toFixed(4)}) — ${fmt(h.eval)}
+      </option>`).join('');
+
+    if (!holdings.length) {
+      infoEl.innerHTML = '<div class="small" style="color:#f85149">보유 종목 없음</div>';
+    } else {
+      infoEl.innerHTML = `<div class="small gray">보유 ${_mtMarket==='stock'?'주식':'코인'} ${holdings.length}종목</div>`;
+    }
+    // ticker가 미리 지정된 경우 선택
+    if (document.getElementById('mt-ticker').value) {
+      const pre = document.getElementById('mt-ticker').value;
+      const opt = [...sel.options].find(o => o.value === pre);
+      if (opt) { sel.value = pre; onMtHoldingSelect(); }
+    }
+    calcMtAmount();
+  }
+}
+
+function onMtHoldingSelect() {
+  const sel = document.getElementById('mt-holding-select');
+  const opt = sel.options[sel.selectedIndex];
+  document.getElementById('mt-ticker').value = sel.value;
+  document.getElementById('mt-name').value   = opt?.dataset.name || sel.value;
+  calcMtAmount();
+}
+
+function setMtPct(p) {
+  _mtPct = p;
+  [10,25,50,75,100].forEach(x => {
+    document.getElementById('mt-pct-'+x).className = 'btn ' + (x===p ? 'btn-blue' : 'btn-gray');
+  });
+  calcMtAmount();
+}
+
+function calcMtAmount() {
+  const disp = document.getElementById('mt-amount-display');
+  if (!_mtPortfolio) { disp.textContent = ''; return; }
+  const s = _mtPortfolio.stock || {}, c = _mtPortfolio.crypto || {};
+
+  if (_mtAction === 'BUY') {
+    const cash = _mtMarket === 'stock' ? (s.orderable_cash || s.cash || 0) : (c.cash || 0);
+    const amt  = Math.floor(cash * _mtPct / 100);
+    disp.innerHTML = `<span style="color:#58a6ff;font-weight:600">${fmt(amt)}</span> <span class="small gray">(${_mtPct}%)</span>`;
+  } else {
+    const sel = document.getElementById('mt-holding-select');
+    const opt = sel?.options[sel?.selectedIndex];
+    if (!opt || !opt.value) { disp.textContent = '종목을 선택하세요'; return; }
+    const totalQty   = parseFloat(opt.dataset.qty || 0);
+    const price      = parseFloat(opt.dataset.price || 0);
+    const sellQty    = _mtMarket === 'stock'
+      ? Math.max(1, Math.floor(totalQty * _mtPct / 100))
+      : parseFloat((totalQty * _mtPct / 100).toFixed(8));
+    const sellAmt    = Math.round(sellQty * price);
+    const qtyStr     = _mtMarket === 'stock' ? sellQty+'주' : sellQty.toFixed(4);
+    disp.innerHTML = `<span style="color:#f0883e;font-weight:600">${qtyStr}</span> <span class="small gray">≈ ${fmt(sellAmt)} (${_mtPct}%)</span>`;
+  }
+}
+
 function closeManualTrade() {
   document.getElementById('manual-trade-modal').style.display = 'none';
 }
+
 function setMtAction(a) {
   _mtAction = a;
   document.getElementById('mt-buy-btn').className  = 'btn ' + (a==='BUY'  ? 'btn-green' : 'btn-gray');
   document.getElementById('mt-sell-btn').className = 'btn ' + (a==='SELL' ? 'btn-red'   : 'btn-gray');
+  document.getElementById('mt-submit-btn').className = 'btn ' + (a==='BUY' ? 'btn-green' : 'btn-red');
+  document.getElementById('mt-submit-btn').textContent = a==='BUY' ? '매수 실행' : '매도 실행';
+  if (_mtPortfolio) updateMtBalanceInfo();
 }
+
 function setMtMarket(m) {
   _mtMarket = m;
-  document.getElementById('mt-stock-btn').className  = 'btn ' + (m==='stock'  ? 'btn-blue'   : 'btn-gray');
-  document.getElementById('mt-crypto-btn').className = 'btn ' + (m==='crypto' ? 'btn-yellow' : 'btn-gray');
+  document.getElementById('mt-stock-btn').className  = 'btn ' + (m==='stock'  ? 'btn-blue' : 'btn-gray');
+  document.getElementById('mt-crypto-btn').className = 'btn ' + (m==='crypto' ? 'btn-blue' : 'btn-gray');
+  if (_mtPortfolio) updateMtBalanceInfo();
 }
+
 async function submitManualTrade() {
   const ticker = document.getElementById('mt-ticker').value.trim();
   const name   = document.getElementById('mt-name').value.trim() || ticker;
-  const amount = parseFloat(document.getElementById('mt-amount').value) || null;
   if (!ticker) { alert('종목코드를 입력하세요'); return; }
 
+  // 금액/수량 계산
+  let amount_krw = null, qty = null;
+  const s = _mtPortfolio?.stock || {}, c = _mtPortfolio?.crypto || {};
+
+  if (_mtAction === 'BUY') {
+    const cash = _mtMarket === 'stock' ? (s.orderable_cash || s.cash || 0) : (c.cash || 0);
+    amount_krw = Math.floor(cash * _mtPct / 100);
+  } else {
+    const sel = document.getElementById('mt-holding-select');
+    const opt = sel?.options[sel?.selectedIndex];
+    const totalQty = parseFloat(opt?.dataset.qty || 0);
+    qty = _mtMarket === 'stock'
+      ? Math.max(1, Math.floor(totalQty * _mtPct / 100))
+      : parseFloat((totalQty * _mtPct / 100).toFixed(8));
+    amount_krw = qty * parseFloat(opt?.dataset.price || 0);
+  }
+
   const resEl = document.getElementById('mt-result');
-  resEl.style.display = 'block';
-  resEl.style.background = '#21262d';
-  resEl.style.color = '#c9d1d9';
+  resEl.style.display = 'block'; resEl.style.background = '#21262d'; resEl.style.color = '#c9d1d9';
   resEl.textContent = '주문 처리 중...';
+  document.getElementById('mt-submit-btn').disabled = true;
 
   try {
-    const r = await postJson('/api/manual-trade', {
-      market: _mtMarket, ticker, name, action: _mtAction, amount_krw: amount
-    });
+    const r = await postJson('/api/manual-trade', { market: _mtMarket, ticker, name, action: _mtAction, amount_krw, qty });
     const ok = r.status === 'executed';
     resEl.style.background = ok ? '#0d1f12' : '#1f0d0d';
     resEl.style.color      = ok ? '#3fb950' : '#f85149';
     if (ok) {
-      const qty = r.qty || (r.amount_krw / r.price).toFixed(4);
-      resEl.textContent = `✓ ${_mtAction === 'BUY' ? '매수' : '매도'} 완료 — ${qty} @ ${Number(r.price).toLocaleString('ko-KR')}원`;
-      setTimeout(() => { closeManualTrade(); loadTradesPage(1); refreshAll(); }, 1500);
+      const dQty = r.qty != null ? (r.qty > 1 ? r.qty+'주' : Number(r.qty).toFixed(4)) : '-';
+      resEl.textContent = `✓ ${_mtAction==='BUY'?'매수':'매도'} 완료 — ${dQty} @ ${Number(r.price||0).toLocaleString('ko-KR')}원`;
+      setTimeout(() => { closeManualTrade(); loadTradesPage(1); refreshAll(); }, 1800);
     } else {
       resEl.textContent = `✗ ${r.error || r.reason || '주문 실패'}`;
     }
@@ -643,8 +801,9 @@ async function submitManualTrade() {
     resEl.style.background = '#1f0d0d'; resEl.style.color = '#f85149';
     resEl.textContent = '✗ 네트워크 오류';
   }
+  document.getElementById('mt-submit-btn').disabled = false;
 }
-// ESC로 모달 닫기
+
 document.addEventListener('keydown', e => { if(e.key==='Escape') closeManualTrade(); });
 
 // ───────────────────── 포트폴리오 ─────────────────────
