@@ -104,10 +104,10 @@ def _chat(messages: list[dict], max_tokens: int = 4096, force_json: bool = True)
     if config.AI_PROVIDER == "gemini":
         if not config.GEMINI_API_KEY:
             return None
-        # 주 모델 실패 시 폴백할 모델 순서
+        # 주 모델 실패 시 폴백할 모델 순서 (2.0/1.5는 구글에서 종료됨)
         gemini_models = [config.GEMINI_MODEL]
-        if config.GEMINI_MODEL != "gemini-1.5-flash":
-            gemini_models.append("gemini-1.5-flash")
+        if config.GEMINI_MODEL != "gemini-2.5-flash":
+            gemini_models.append("gemini-2.5-flash")
         system = next((m["content"] for m in messages if m["role"] == "system"), None)
         chat_msgs = [m for m in messages if m["role"] != "system"]
         body = {
@@ -118,6 +118,7 @@ def _chat(messages: list[dict], max_tokens: int = 4096, force_json: bool = True)
             "generationConfig": {
                 "temperature": 0.3,
                 "maxOutputTokens": max_tokens,
+                "thinkingConfig": {"thinkingBudget": 0},  # thinking 비활성화 → 비용 절감
             },
         }
         if system:
