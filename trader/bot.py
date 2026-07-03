@@ -187,49 +187,33 @@ async def run_cycle():
         crypto_summaries = [r for r in crypto_results if r]
         _log(f"지표 계산 완료 — 주식 {len(stock_summaries)}개, 코인 {len(crypto_summaries)}개")
 
-        # 4. 손절/익절 자동 실행 (AI 결정 전에 먼저 처리)
-        sl = config.STOP_LOSS_RATIO * 100    # -5.0
-        tp = config.TAKE_PROFIT_RATIO * 100  # +15.0
-
+        # 4. 극단적 손실 안전망 (-20% 초과 시 AI 무관하게 강제 손절)
+        EMERGENCY_CUT = -20.0
         for h in list(stock_holdings):
             rate = h.get("profit_rate", 0)
-            if rate <= sl:
-                _log(f"⚠ 손절 발동: {h['name']}({h['code']}) {rate:.1f}% (기준 {sl:.0f}%) → 자동 SELL")
+            if rate <= EMERGENCY_CUT:
+                _log(f"🚨 긴급 손절: {h['name']}({h['code']}) {rate:.1f}% — 강제 SELL")
                 res = await asyncio.to_thread(
-                    executor.execute_stock, h["code"], h["name"], "SELL", 1.0, f"손절 자동매도 ({rate:.1f}%)", stock_portfolio
+                    executor.execute_stock, h["code"], h["name"], "SELL", 1.0,
+                    f"긴급 손절 ({rate:.1f}%, 한계선 {EMERGENCY_CUT:.0f}%)", stock_portfolio
                 )
                 if res.get("status") == "executed":
-                    _log(f"✓ 손절 체결: {h['name']} {res.get('amount',0):,.0f}원")
+                    _log(f"✓ 긴급 손절 체결: {h['name']} {res.get('amount',0):,.0f}원")
                 else:
-                    _log(f"✗ 손절 실패: {h['name']} — {res.get('error') or res.get('reason','')}", "error")
-            elif rate >= tp:
-                _log(f"✓ 익절 발동: {h['name']}({h['code']}) +{rate:.1f}% (기준 +{tp:.0f}%) → 자동 SELL")
-                res = await asyncio.to_thread(
-                    executor.execute_stock, h["code"], h["name"], "SELL", 1.0, f"익절 자동매도 (+{rate:.1f}%)", stock_portfolio
-                )
-                if res.get("status") == "executed":
-                    _log(f"✓ 익절 체결: {h['name']} {res.get('amount',0):,.0f}원")
-                else:
-                    _log(f"✗ 익절 실패: {h['name']} — {res.get('error') or res.get('reason','')}", "error")
+                    _log(f"✗ 긴급 손절 실패: {h['name']} — {res.get('error') or res.get('reason','')}", "error")
 
         for h in list(crypto_holdings):
             rate = h.get("profit_rate", 0)
-            if rate <= sl:
-                _log(f"⚠ 손절 발동: {h['ticker']} {rate:.1f}% → 자동 SELL")
+            if rate <= EMERGENCY_CUT:
+                _log(f"🚨 긴급 손절: {h['ticker']} {rate:.1f}% — 강제 SELL")
                 res = await asyncio.to_thread(
-                    executor.execute_crypto, h["ticker"], "SELL", 1.0, f"손절 자동매도 ({rate:.1f}%)", crypto_portfolio
+                    executor.execute_crypto, h["ticker"], "SELL", 1.0,
+                    f"긴급 손절 ({rate:.1f}%)", crypto_portfolio
                 )
                 if res.get("status") == "executed":
-                    _log(f"✓ 손절 체결: {h['ticker']} {res.get('amount_krw',0):,.0f}원")
-            elif rate >= tp:
-                _log(f"✓ 익절 발동: {h['ticker']} +{rate:.1f}% → 자동 SELL")
-                res = await asyncio.to_thread(
-                    executor.execute_crypto, h["ticker"], "SELL", 1.0, f"익절 자동매도 (+{rate:.1f}%)", crypto_portfolio
-                )
-                if res.get("status") == "executed":
-                    _log(f"✓ 익절 체결: {h['ticker']} {res.get('amount_krw',0):,.0f}원")
+                    _log(f"✓ 긴급 손절 체결: {h['ticker']} {res.get('amount_krw',0):,.0f}원")
 
-        # 6. AI 의사결정
+        # 6. AI 의사결정 (AI가 손익률 보고 손절/익절 직접 판단)
         _model = {"gemini": config.GEMINI_MODEL, "anthropic": config.ANTHROPIC_MODEL, "ollama": config.OLLAMA_MODEL}.get(config.AI_PROVIDER, config.AI_PROVIDER)
         _log(f"AI 분석 요청 중 ({config.AI_PROVIDER} / {_model})...")
         portfolio_status = {

@@ -14,11 +14,21 @@ logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = """당신은 전문 퀀트 트레이더 AI입니다. 5가지 기술적 전략이 코드로 이미 투표를 완료했습니다. 당신의 역할은 투표 방향을 확정하고 이유를 설명하는 것입니다.
 
-【핵심 규칙 — 반드시 준수】
+【보유 종목 손익 판단 — 최우선 검토】
+portfolio_status의 stock_holdings/crypto_holdings에 profit_rate(손익률%)가 포함됩니다.
+보유 종목은 기술적 지표와 손익률을 종합해 당신이 직접 판단하세요:
+- 손실이 크고 기술 지표도 약세 → SELL (추가 손실 차단)
+- 손실이 크지만 반등 신호 강함 → HOLD 가능 (이유 명확히)
+- 수익이 충분하고 지표 고점 신호 → SELL (수익 실현)
+- 수익 중이고 상승세 지속 → HOLD 또는 BUY 추가 금지
+※ 이미 보유 중인 종목에 BUY 결정 금지 (물타기 방지)
+
+【기술적 투표 규칙】
 각 종목 데이터의 【전략투표】 항목을 확인하세요:
 - 방향이 BUY  → action은 반드시 BUY 또는 HOLD만 선택 (SELL 불가)
 - 방향이 SELL → action은 반드시 SELL 또는 HOLD만 선택 (BUY 불가)
 - 방향이 HOLD → action은 HOLD
+단, 보유 종목의 손실이 -10% 이상이면 기술 지표 방향과 무관하게 SELL 가능
 
 confidence는 score 절댓값으로 결정:
 - score ±1 → 0.60~0.69
@@ -45,7 +55,7 @@ BUY 시 amount_krw 규칙:
       "action": "BUY|SELL|HOLD",
       "confidence": 0.0~1.0,
       "amount_krw": 매수금액_정수(BUY일때만),
-      "reason": "5전략 투표 결과와 주요 지표 기반 결정 이유 (한국어, 2~3문장)"
+      "reason": "손익률·기술지표 종합 판단 이유 (한국어, 2~3문장)"
     }
   ],
   "market_summary": "전반적인 시장 상황 요약 (한국어, 2~3문장)"
@@ -190,9 +200,30 @@ def analyze_and_decide(
     portfolio_status: dict,
 ) -> dict:
     """전체 종목을 분석하고 매매 결정을 반환."""
+    # 보유 종목 손익 요약 (AI에게 명시적으로 강조)
+    holding_lines = []
+    for h in portfolio_status.get("stock_holdings", []):
+        rate = h.get("profit_rate", 0)
+        pl   = h.get("pl_amount", 0)
+        flag = "⚠ 큰 손실 — SELL 적극 검토" if rate <= -10 else ("✓ 수익 중 — 익절 검토" if rate >= 10 else "")
+        holding_lines.append(
+            f"  [{h.get('code','')}] {h.get('name','')} | 손익률 {rate:+.1f}% ({pl:+,.0f}원) {flag}"
+        )
+    for h in portfolio_status.get("crypto_holdings", []):
+        rate = h.get("profit_rate", 0)
+        pl   = h.get("pl_amount", 0)
+        flag = "⚠ 큰 손실 — SELL 적극 검토" if rate <= -10 else ("✓ 수익 중 — 익절 검토" if rate >= 10 else "")
+        holding_lines.append(
+            f"  [{h.get('ticker','')}] 코인 | 손익률 {rate:+.1f}% ({pl:+,.0f}원) {flag}"
+        )
+    holdings_summary = "\n".join(holding_lines) if holding_lines else "  없음"
+
     portfolio_text = json.dumps(portfolio_status, ensure_ascii=False, indent=2)
 
-    user_message = f"""현재 포트폴리오 상태:
+    user_message = f"""【현재 보유 종목 손익 현황 — 반드시 먼저 검토】
+{holdings_summary}
+
+현재 포트폴리오 상태:
 {portfolio_text}
 
 === 주식 기술적 분석 ===
@@ -202,7 +233,8 @@ def analyze_and_decide(
 {chr(10).join(crypto_summaries) if crypto_summaries else '코인 데이터 없음'}
 
 위 데이터를 분석하여 각 종목/코인에 대한 매매 결정을 JSON 형식으로 출력하세요.
-보유 종목이 있다면 현재 기술적 지표를 기준으로 수익 실현 또는 손실 최소화 여부를 판단하세요."""
+⚠ 큰 손실 종목은 기술적 지표와 무관하게 SELL을 적극 고려하세요.
+이미 보유 중인 종목에 BUY 결정은 하지 마세요 (물타기 방지)."""
 
     text = _chat(
         [
