@@ -131,7 +131,11 @@ def _chat(messages: list[dict], max_tokens: int = 4096, force_json: bool = True)
                     f"/{model}:generateContent?key={config.GEMINI_API_KEY}"
                 )
                 resp = requests.post(url, json=body, timeout=60)
-                resp.raise_for_status()
+                if not resp.ok:
+                    logger.warning(
+                        f"Gemini HTTP 오류 (model={model}): {resp.status_code} — {resp.text[:400]}"
+                    )
+                    resp.raise_for_status()
                 return resp.json()["candidates"][0]["content"]["parts"][0]["text"]
             except Exception as e:
                 logger.warning(f"Gemini 호출 실패 (model={model}): {e}")
