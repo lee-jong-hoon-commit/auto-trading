@@ -240,27 +240,47 @@ async def run_cycle():
         # AI가 반환한 name은 틀릴 수 있으므로 실제 분석 대상 목록의 이름 우선 사용
         stock_name_map = {s.get("code", ""): s.get("name", "") for s in stock_candidates}
 
+        # 코인 분석 대상 ticker set (검증용)
+        crypto_ticker_set = {c.get("ticker", "") for c in crypto_candidates}
+
         executed = []
         for decision in decisions:
             action     = decision.get("action", "HOLD")
             confidence = decision.get("confidence", 0)
             reason     = decision.get("reason", "")
             ticker     = decision.get("ticker", "")
-            name       = stock_name_map.get(ticker) or decision.get("name", ticker)
+            ai_name    = decision.get("name", ticker)
             amount_krw = decision.get("amount_krw")
 
             if action == "HOLD":
                 continue
 
+            # ── 데이터 정합성 체크 ──────────────────────────────────────────
+            is_crypto = ticker.startswith("KRW-")
+
+            # 1) 분석하지 않은 종목/코인은 실행 금지 (AI hallucination 방지)
+            if not is_crypto and ticker not in stock_name_map:
+                _log(f"→ 스킵: {ai_name}({ticker}) — 분석 대상에 없는 종목 코드 (AI 오류)", "warning")
+                continue
+            if is_crypto and ticker not in crypto_ticker_set:
+                _log(f"→ 스킵: {ticker} — 분석 대상에 없는 코인 (AI 오류)", "warning")
+                continue
+
+            # 2) 정식 이름은 우리 데이터 기준 사용, AI 이름과 다르면 경고
+            name = stock_name_map.get(ticker, ai_name) if not is_crypto else ai_name
+            if not is_crypto and ai_name and name != ai_name:
+                _log(f"⚠ 종목명 불일치 수정: AI={ai_name} → 실제={name} ({ticker})", "warning")
+            # ────────────────────────────────────────────────────────────────
+
             # 주문가능금액 0원이면 주식 BUY 건너뜀 (SELL은 그대로 실행)
-            if action == "BUY" and not ticker.startswith("KRW-") and stock_cash <= 0:
+            if action == "BUY" and not is_crypto and stock_cash <= 0:
                 _log(f"→ 스킵: {name} BUY — 주문가능금액 부족 ({stock_cash:,.0f}원)")
                 continue
 
             # 이미 보유 중인 종목 추가 매수 금지 (물타기 방지)
             if action == "BUY":
                 already_held = (
-                    ticker in {h["code"] for h in stock_holdings} if not ticker.startswith("KRW-")
+                    ticker in {h["code"] for h in stock_holdings} if not is_crypto
                     else ticker in {h["ticker"] for h in crypto_holdings}
                 )
                 if already_held:
