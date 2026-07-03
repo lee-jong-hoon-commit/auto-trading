@@ -187,7 +187,49 @@ async def run_cycle():
         crypto_summaries = [r for r in crypto_results if r]
         _log(f"지표 계산 완료 — 주식 {len(stock_summaries)}개, 코인 {len(crypto_summaries)}개")
 
-        # 4. AI 의사결정
+        # 4. 손절/익절 자동 실행 (AI 결정 전에 먼저 처리)
+        sl = config.STOP_LOSS_RATIO * 100    # -5.0
+        tp = config.TAKE_PROFIT_RATIO * 100  # +15.0
+
+        for h in list(stock_holdings):
+            rate = h.get("profit_rate", 0)
+            if rate <= sl:
+                _log(f"⚠ 손절 발동: {h['name']}({h['code']}) {rate:.1f}% (기준 {sl:.0f}%) → 자동 SELL")
+                res = await asyncio.to_thread(
+                    executor.execute_stock, h["code"], h["name"], "SELL", 1.0, f"손절 자동매도 ({rate:.1f}%)", stock_portfolio
+                )
+                if res.get("status") == "executed":
+                    _log(f"✓ 손절 체결: {h['name']} {res.get('amount',0):,.0f}원")
+                else:
+                    _log(f"✗ 손절 실패: {h['name']} — {res.get('error') or res.get('reason','')}", "error")
+            elif rate >= tp:
+                _log(f"✓ 익절 발동: {h['name']}({h['code']}) +{rate:.1f}% (기준 +{tp:.0f}%) → 자동 SELL")
+                res = await asyncio.to_thread(
+                    executor.execute_stock, h["code"], h["name"], "SELL", 1.0, f"익절 자동매도 (+{rate:.1f}%)", stock_portfolio
+                )
+                if res.get("status") == "executed":
+                    _log(f"✓ 익절 체결: {h['name']} {res.get('amount',0):,.0f}원")
+                else:
+                    _log(f"✗ 익절 실패: {h['name']} — {res.get('error') or res.get('reason','')}", "error")
+
+        for h in list(crypto_holdings):
+            rate = h.get("profit_rate", 0)
+            if rate <= sl:
+                _log(f"⚠ 손절 발동: {h['ticker']} {rate:.1f}% → 자동 SELL")
+                res = await asyncio.to_thread(
+                    executor.execute_crypto, h["ticker"], "SELL", 1.0, f"손절 자동매도 ({rate:.1f}%)", crypto_portfolio
+                )
+                if res.get("status") == "executed":
+                    _log(f"✓ 손절 체결: {h['ticker']} {res.get('amount_krw',0):,.0f}원")
+            elif rate >= tp:
+                _log(f"✓ 익절 발동: {h['ticker']} +{rate:.1f}% → 자동 SELL")
+                res = await asyncio.to_thread(
+                    executor.execute_crypto, h["ticker"], "SELL", 1.0, f"익절 자동매도 (+{rate:.1f}%)", crypto_portfolio
+                )
+                if res.get("status") == "executed":
+                    _log(f"✓ 익절 체결: {h['ticker']} {res.get('amount_krw',0):,.0f}원")
+
+        # 6. AI 의사결정
         _model = {"gemini": config.GEMINI_MODEL, "anthropic": config.ANTHROPIC_MODEL, "ollama": config.OLLAMA_MODEL}.get(config.AI_PROVIDER, config.AI_PROVIDER)
         _log(f"AI 분석 요청 중 ({config.AI_PROVIDER} / {_model})...")
         portfolio_status = {
@@ -210,7 +252,7 @@ async def run_cycle():
         hold_cnt = sum(1 for d in decisions if d.get("action") == "HOLD")
         _log(f"AI 결정 완료: BUY {buy_cnt}건, SELL {sell_cnt}건, HOLD {hold_cnt}건")
 
-        # 5. 매매 실행
+        # 7. 매매 실행
         # AI가 반환한 name은 틀릴 수 있으므로 실제 분석 대상 목록의 이름 우선 사용
         stock_name_map = {s.get("code", ""): s.get("name", "") for s in stock_candidates}
 
@@ -230,6 +272,16 @@ async def run_cycle():
             if action == "BUY" and not ticker.startswith("KRW-") and stock_cash <= 0:
                 _log(f"→ 스킵: {name} BUY — 주문가능금액 부족 ({stock_cash:,.0f}원)")
                 continue
+
+            # 이미 보유 중인 종목 추가 매수 금지 (물타기 방지)
+            if action == "BUY":
+                already_held = (
+                    ticker in {h["code"] for h in stock_holdings} if not ticker.startswith("KRW-")
+                    else ticker in {h["ticker"] for h in crypto_holdings}
+                )
+                if already_held:
+                    _log(f"→ 스킵: {name} BUY — 이미 보유 중 (물타기 방지)")
+                    continue
 
             _log(f"주문 실행: {action} {name}({ticker}) confidence={confidence:.2f}")
             if ticker.startswith("KRW-"):

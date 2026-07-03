@@ -34,6 +34,8 @@ class Config:
 
     # Trading
     TRADE_INTERVAL_MINUTES: int = int(os.getenv("TRADE_INTERVAL_MINUTES", "30"))
+    STOP_LOSS_RATIO: float = float(os.getenv("STOP_LOSS_RATIO", "-0.05"))    # -5% 손절
+    TAKE_PROFIT_RATIO: float = float(os.getenv("TAKE_PROFIT_RATIO", "0.15")) # +15% 익절
     # AI가 포지션 수/금액/손절·익절을 자율 결정 — 아래는 분석 후보 상한선(성능용)
     STOCK_ANALYSIS_LIMIT: int = 10   # 1회 사이클에 기술적 지표 계산할 최대 주식 수
     CRYPTO_ANALYSIS_LIMIT: int = 8   # 1회 사이클에 기술적 지표 계산할 최대 코인 수
