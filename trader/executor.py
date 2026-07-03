@@ -32,8 +32,10 @@ def execute_stock(code: str, name: str, action: str, confidence: float, reason: 
     if action == "HOLD":
         return {"status": "skipped", "reason": "HOLD 결정"}
 
-    if confidence < 0.6:
-        return {"status": "skipped", "reason": f"신뢰도 부족 ({confidence:.2f})"}
+    # BUY는 0.70 이상 필요 (score=1짜리 0.6x 차단), SELL은 0.60 이상
+    min_conf = 0.70 if action == "BUY" else 0.60
+    if confidence < min_conf:
+        return {"status": "skipped", "reason": f"신뢰도 부족 ({confidence:.2f} < {min_conf:.2f})"}
 
     try:
         current_price = kis_client.get_current_price(code)
@@ -112,8 +114,9 @@ def execute_crypto(ticker: str, action: str, confidence: float, reason: str,
     if action == "HOLD":
         return {"status": "skipped", "reason": "HOLD 결정"}
 
-    if confidence < 0.6:
-        return {"status": "skipped", "reason": f"신뢰도 부족 ({confidence:.2f})"}
+    min_conf = 0.70 if action == "BUY" else 0.60
+    if confidence < min_conf:
+        return {"status": "skipped", "reason": f"신뢰도 부족 ({confidence:.2f} < {min_conf:.2f})"}
 
     try:
         current_price = upbit_client.get_current_price(ticker)

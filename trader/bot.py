@@ -106,7 +106,6 @@ async def run_cycle():
             dynamic = await asyncio.to_thread(kis_client.get_dynamic_stocks, stock_cash, 40)
             if dynamic:
                 source = "거래대금 상위"
-                # 채권·구조화상품(알파벳 포함) 및 ETF 브랜드명 제외
                 _ETF_PREFIXES = ("KODEX", "TIGER", "KINDEX", "SOL", "ACE", "RISE", "HANARO", "ARIRANG", "KOSEF")
                 universe = [
                     s for s in dynamic
@@ -117,9 +116,17 @@ async def run_cycle():
             else:
                 source = "관심종목(폴백)"
                 universe = [s for s in watchlist.get_stocks() if s["code"] not in held_codes]
-            # quick_screen 없이 거래대금 상위 직접 사용 (API가 이미 볼륨순 정렬)
-            stock_candidates = list(stock_holdings) + universe[:config.STOCK_ANALYSIS_LIMIT]
-            _log(f"[{source}] 주식 분석 대상 확정: {len(stock_candidates)}개")
+
+            # 주식도 AI 1차 스크리닝 (코인과 동일하게 유망 종목만 선별)
+            if len(universe) > config.STOCK_ANALYSIS_LIMIT:
+                _log(f"[{source}] 주식 {len(universe)}개 AI 1차 스크리닝 중...")
+                screened = await asyncio.to_thread(ai_engine.quick_screen, universe, "stock")
+                new_candidates = screened[:config.STOCK_ANALYSIS_LIMIT]
+            else:
+                new_candidates = universe[:config.STOCK_ANALYSIS_LIMIT]
+
+            stock_candidates = list(stock_holdings) + new_candidates
+            _log(f"[{source}] 주식 분석 대상 확정: {len(stock_candidates)}개 (보유 {len(stock_holdings)} + 신규 {len(new_candidates)})")
 
         if config.is_upbit_ready:
             held_tickers = {h["ticker"] for h in crypto_holdings}
