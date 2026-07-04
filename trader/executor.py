@@ -132,12 +132,17 @@ def execute_crypto(ticker: str, action: str, confidence: float, reason: str,
             if amount < config.UPBIT_MIN_ORDER_KRW:
                 return {"status": "skipped", "reason": f"매수금액 부족 ({amount:,.0f}원 < 최소 {config.UPBIT_MIN_ORDER_KRW:,}원)"}
             result = upbit_client.place_order(ticker, "buy", amount_krw=amount)
+            # 업비트 시장가 매수는 원화 금액으로 주문 → 체결 수량은 응답 executed_volume에서 파싱
+            executed_qty = float(result.get("executed_volume") or 0)
+            if not executed_qty and current_price:
+                executed_qty = amount / current_price  # 체결 전 응답이면 추정값 사용
             record = {
                 "time": datetime.now(KST).isoformat(),
                 "market": "crypto",
                 "ticker": ticker,
                 "action": "BUY",
                 "price": current_price,
+                "qty": executed_qty,
                 "amount_krw": amount,
                 "confidence": confidence,
                 "reason": reason,
