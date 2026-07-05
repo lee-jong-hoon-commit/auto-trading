@@ -121,6 +121,22 @@ def execute_stock(code: str, name: str, action: str, confidence: float, reason: 
         return {"status": "error", "error": str(e)}
 
 
+def _upbit_error(result) -> str | None:
+    """업비트 주문 응답에서 오류 메시지 추출. 정상이면 None.
+
+    pyupbit은 주문 실패 시 예외 대신 {'error': {'message': ..., 'name': ...}}
+    형태의 응답을 그대로 반환하는 경우가 있어 명시적으로 확인해야 한다.
+    """
+    if result is None:
+        return "응답 없음"
+    if isinstance(result, dict) and result.get("error"):
+        err = result["error"]
+        if isinstance(err, dict):
+            return err.get("message") or err.get("name") or str(err)
+        return str(err)
+    return None
+
+
 def execute_crypto(ticker: str, action: str, confidence: float, reason: str,
                    portfolio: dict, amount_krw: float = None, manual_qty: float = None,
                    max_position_krw: float = None) -> dict:
@@ -153,6 +169,10 @@ def execute_crypto(ticker: str, action: str, confidence: float, reason: str,
             if amount < config.UPBIT_MIN_ORDER_KRW:
                 return {"status": "skipped", "reason": f"매수금액 부족 ({amount:,.0f}원 < 최소 {config.UPBIT_MIN_ORDER_KRW:,}원)"}
             result = upbit_client.place_order(ticker, "buy", amount_krw=amount)
+            err = _upbit_error(result)
+            if err:
+                logger.warning(f"[CRYPTO] 업비트 매수 거부 {ticker}: {err}")
+                return {"status": "error", "error": f"업비트 주문 거부: {err}"}
             # 업비트 시장가 매수는 원화 금액으로 주문 → 체결 수량은 응답 executed_volume에서 파싱
             executed_qty = float(result.get("executed_volume") or 0)
             if not executed_qty and current_price:
@@ -180,6 +200,10 @@ def execute_crypto(ticker: str, action: str, confidence: float, reason: str,
             if sell_value < config.UPBIT_MIN_ORDER_KRW:
                 return {"status": "skipped", "reason": f"매도 금액 부족 ({sell_value:.0f}원, 최소 {config.UPBIT_MIN_ORDER_KRW:,}원)"}
             result = upbit_client.place_order(ticker, "sell", qty=qty)
+            err = _upbit_error(result)
+            if err:
+                logger.warning(f"[CRYPTO] 업비트 매도 거부 {ticker}: {err}")
+                return {"status": "error", "error": f"업비트 주문 거부: {err}"}
             record = {
                 "time": datetime.now(KST).isoformat(),
                 "market": "crypto",
@@ -207,8 +231,9 @@ def execute_crypto(ticker: str, action: str, confidence: float, reason: str,
         return {"status": "executed", **record}
 
     except Exception as e:
-        logger.error(f"[CRYPTO] 주문 실패 {ticker}: {e}")
-        return {"status": "error", "error": str(e)}
+        # KeyError: 0 등 원인 불명 메시지 방지 — 예외 타입 포함해 표시
+        logger.error(f"[CRYPTO] 주문 실패 {ticker}: {type(e).__name__}: {e}")
+        return {"status": "error", "error": f"{type(e).__name__}: {e} (업비트 API 일시 오류일 수 있음 — 재시도 해보세요)"}
 
 
 

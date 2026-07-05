@@ -35,10 +35,7 @@ def get_balance() -> dict:
             total += qty
         else:
             ticker = f"KRW-{currency}"
-            try:
-                current = pyupbit.get_current_price(ticker) or 0
-            except Exception:
-                current = 0
+            current = get_current_price(ticker)  # 재시도 포함 (429 방어)
             value = qty * current
             profit_rate = ((current - avg) / avg * 100) if avg > 0 else 0
             total += value
@@ -69,7 +66,29 @@ def get_ohlcv(ticker: str, interval: str = "day", count: int = 100) -> pd.DataFr
 
 
 def get_current_price(ticker: str) -> float:
-    return pyupbit.get_current_price(ticker) or 0.0
+    """현재가 조회 — REST 직접 호출 + 재시도.
+
+    pyupbit.get_current_price는 API 제한(429)/오류 응답에서 KeyError: 0을
+    던지는 경우가 있어, 공개 ticker API를 직접 호출하고 3회 재시도한다.
+    """
+    import time as _time
+    for attempt in range(3):
+        try:
+            resp = requests.get(
+                "https://api.upbit.com/v1/ticker",
+                params={"markets": ticker}, timeout=5,
+            )
+            if resp.status_code == 429:  # 요청 제한 — 잠시 대기 후 재시도
+                _time.sleep(0.3 * (attempt + 1))
+                continue
+            resp.raise_for_status()
+            data = resp.json()
+            if isinstance(data, list) and data:
+                return float(data[0].get("trade_price") or 0)
+            return 0.0
+        except Exception:
+            _time.sleep(0.2 * (attempt + 1))
+    return 0.0
 
 
 DEFAULT_TICKERS = ["KRW-BTC", "KRW-ETH", "KRW-XRP", "KRW-SOL", "KRW-DOGE"]
