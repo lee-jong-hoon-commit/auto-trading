@@ -7,6 +7,7 @@
 data/kis_token.json
 data/watchlist.json
 logs/trades.json
+logs/positions.json
 logs/*.log
 *.log
 

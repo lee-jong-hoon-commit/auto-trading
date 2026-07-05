@@ -6,7 +6,7 @@ from datetime import datetime, timezone, timedelta
 KST = timezone(timedelta(hours=9))
 from pathlib import Path
 from config import config
-from trader import kis_client, upbit_client
+from trader import kis_client, upbit_client, risk
 
 LOG_FILE = Path(__file__).parent.parent / "logs" / "trades.json"
 LOG_FILE.parent.mkdir(exist_ok=True)
@@ -27,13 +27,14 @@ def _save_trade(record: dict):
 
 
 def execute_stock(code: str, name: str, action: str, confidence: float, reason: str,
-                  portfolio: dict, amount_krw: float = None, manual_qty: int = None) -> dict:
+                  portfolio: dict, amount_krw: float = None, manual_qty: int = None,
+                  max_position_krw: float = None) -> dict:
     """주식 매매 실행"""
     if action == "HOLD":
         return {"status": "skipped", "reason": "HOLD 결정"}
 
-    # BUY는 0.70 이상 필요 (score=1짜리 0.6x 차단), SELL은 0.60 이상
-    min_conf = 0.70 if action == "BUY" else 0.60
+    # BUY는 0.75 이상 필요 (진입 조건 강화), SELL은 0.60 이상
+    min_conf = 0.75 if action == "BUY" else 0.60
     if confidence < min_conf:
         return {"status": "skipped", "reason": f"신뢰도 부족 ({confidence:.2f} < {min_conf:.2f})"}
 
@@ -48,8 +49,11 @@ def execute_stock(code: str, name: str, action: str, confidence: float, reason: 
             # KIS 주문가능금액 우선 사용 (예수금과 다를 수 있음 — T+2 미결제, 수수료 등)
             _oc = portfolio.get("orderable_cash")
             orderable = _oc if _oc is not None else cash
-            budget = float(amount_krw) if amount_krw else orderable * 0.5
-            budget = max(budget, orderable * 0.3)    # AI 소액 지정 시 최소 30%로 보정
+            # 포지션 사이징: 종목당 총자산의 MAX_POSITION_PCT 이내로 제한
+            position_cap = max_position_krw if max_position_krw and max_position_krw > 0 \
+                else orderable * config.MAX_POSITION_PCT
+            budget = float(amount_krw) if amount_krw else position_cap
+            budget = min(budget, position_cap)       # AI가 크게 불러도 캡 적용
             budget = min(budget, orderable * 0.95)   # 주문가능금액의 95% 상한 (수수료 여유)
             qty = int(budget // current_price)
             if qty < 1:
@@ -97,6 +101,11 @@ def execute_stock(code: str, name: str, action: str, confidence: float, reason: 
 
         _save_trade(record)
         if kis_ok:
+            # 리스크 레이어 포지션 기록 (손절/트레일링/쿨다운 관리용)
+            if action == "BUY":
+                risk.register_entry(code, name, "stock", current_price)
+            else:
+                risk.clear_position(code)
             logger.info(f"[STOCK] {action} {name}({code}) {qty}주 @ {current_price:,}원")
             return {"status": "executed", **record}
         else:
@@ -109,12 +118,13 @@ def execute_stock(code: str, name: str, action: str, confidence: float, reason: 
 
 
 def execute_crypto(ticker: str, action: str, confidence: float, reason: str,
-                   portfolio: dict, amount_krw: float = None, manual_qty: float = None) -> dict:
+                   portfolio: dict, amount_krw: float = None, manual_qty: float = None,
+                   max_position_krw: float = None) -> dict:
     """코인 매매 실행"""
     if action == "HOLD":
         return {"status": "skipped", "reason": "HOLD 결정"}
 
-    min_conf = 0.70 if action == "BUY" else 0.60
+    min_conf = 0.75 if action == "BUY" else 0.60
     if confidence < min_conf:
         return {"status": "skipped", "reason": f"신뢰도 부족 ({confidence:.2f} < {min_conf:.2f})"}
 
@@ -126,9 +136,12 @@ def execute_crypto(ticker: str, action: str, confidence: float, reason: str,
             return {"status": "skipped", "reason": f"현재가 조회 실패 ({ticker})"}
 
         if action == "BUY":
-            # AI가 지정한 금액 사용, 없으면 잔고의 20%
-            amount = float(amount_krw) if amount_krw else cash * 0.2
-            amount = min(amount, cash * 0.8)  # 최대 잔고 80% 안전 제한
+            # 포지션 사이징: 종목당 총자산의 MAX_POSITION_PCT 이내로 제한
+            position_cap = max_position_krw if max_position_krw and max_position_krw > 0 \
+                else cash * config.MAX_POSITION_PCT
+            amount = float(amount_krw) if amount_krw else position_cap
+            amount = min(amount, position_cap)  # AI가 크게 불러도 캡 적용
+            amount = min(amount, cash * 0.95)   # 잔고 상한 (수수료 여유)
             if amount < config.UPBIT_MIN_ORDER_KRW:
                 return {"status": "skipped", "reason": f"매수금액 부족 ({amount:,.0f}원 < 최소 {config.UPBIT_MIN_ORDER_KRW:,}원)"}
             result = upbit_client.place_order(ticker, "buy", amount_krw=amount)
@@ -177,6 +190,11 @@ def execute_crypto(ticker: str, action: str, confidence: float, reason: str,
             return {"status": "skipped", "reason": "알 수 없는 액션"}
 
         _save_trade(record)
+        # 리스크 레이어 포지션 기록 (손절/트레일링/쿨다운 관리용)
+        if action == "BUY":
+            risk.register_entry(ticker, ticker, "crypto", current_price)
+        else:
+            risk.clear_position(ticker)
         logger.info(f"[CRYPTO] {action} {ticker} @ {current_price:,}원")
         return {"status": "executed", **record}
 

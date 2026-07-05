@@ -1,6 +1,7 @@
 """업비트 API 클라이언트"""
 import pyupbit
 import pandas as pd
+import requests
 from config import config
 
 _upbit = None
@@ -74,10 +75,45 @@ def get_current_price(ticker: str) -> float:
 DEFAULT_TICKERS = ["KRW-BTC", "KRW-ETH", "KRW-XRP", "KRW-SOL", "KRW-DOGE"]
 
 
+def get_market_snapshot(tickers: list[str]) -> dict[str, dict]:
+    """공개 ticker API로 24h 등락률·거래대금 일괄 조회 (인증 불필요).
+
+    반환: {ticker: {"price", "change_pct", "trade_value"}}
+    """
+    if not tickers:
+        return {}
+    snapshot = {}
+    try:
+        # 업비트 ticker API는 markets 쿼리로 다건 조회 가능 (100개씩 분할)
+        for i in range(0, len(tickers), 100):
+            chunk = tickers[i:i + 100]
+            resp = requests.get(
+                "https://api.upbit.com/v1/ticker",
+                params={"markets": ",".join(chunk)},
+                timeout=10,
+            )
+            resp.raise_for_status()
+            for r in resp.json():
+                snapshot[r["market"]] = {
+                    "price": float(r.get("trade_price") or 0),
+                    "change_pct": float(r.get("signed_change_rate") or 0) * 100,
+                    "trade_value": float(r.get("acc_trade_price_24h") or 0),
+                }
+    except Exception:
+        pass
+    return snapshot
+
+
 def get_top_tickers(limit: int = 20) -> list[str]:
-    """KRW 마켓 거래량 상위 코인"""
+    """KRW 마켓 24h 거래대금 상위 코인 (거래대금 내림차순 정렬)"""
     tickers = pyupbit.get_tickers(fiat="KRW")
-    return tickers[:limit] if tickers else []
+    if not tickers:
+        return []
+    snapshot = get_market_snapshot(tickers)
+    if not snapshot:
+        return tickers[:limit]  # 조회 실패 시 기존 동작 폴백
+    ranked = sorted(snapshot, key=lambda t: snapshot[t]["trade_value"], reverse=True)
+    return ranked[:limit]
 
 
 def get_analysis_tickers() -> list[str]:

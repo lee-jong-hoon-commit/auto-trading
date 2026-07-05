@@ -441,11 +441,21 @@ def get_volume_rank(market: str = "ALL", budget: float = 0, limit: int = 30) -> 
     out = []
     for r in resp.json().get("output", [])[:limit]:
         try:
-            out.append({
+            item = {
                 "code": r["mksc_shrn_iscd"],
                 "name": r["hts_kor_isnm"],
                 "price": float(r["stck_prpr"]),
-            })
+            }
+            # 스크리닝용 부가 데이터 (필드가 없으면 생략)
+            try:
+                item["change_pct"] = float(r["prdy_ctrt"])
+            except (KeyError, ValueError, TypeError):
+                pass
+            try:
+                item["trade_value"] = float(r["acc_trdval"])  # 누적 거래대금(원)
+            except (KeyError, ValueError, TypeError):
+                pass
+            out.append(item)
         except (KeyError, ValueError, TypeError):
             continue
     return out
