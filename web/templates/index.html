@@ -884,14 +884,32 @@ function setMtPct(p) {
   calcMtAmount();
 }
 
+const UPBIT_MIN_ORDER = 5000;
+
+function isKstStockMarketOpen() {
+  // 브라우저 시간대와 무관하게 KST 기준 계산
+  const kst = new Date(Date.now() + (9 * 60 + new Date().getTimezoneOffset()) * 60000);
+  const day = kst.getDay();
+  if (day === 0 || day === 6) return false;
+  const t = kst.getHours() * 60 + kst.getMinutes();
+  return t >= 9 * 60 && t < 15 * 60 + 30;
+}
+
 function calcMtAmount() {
   const disp = document.getElementById('mt-amount-display');
   if (!_mtPortfolio) { disp.textContent = ''; return; }
   const s = _mtPortfolio.stock || {}, c = _mtPortfolio.crypto || {};
+  const warns = [];
+  if (_mtMarket === 'stock' && !isKstStockMarketOpen()) {
+    warns.push('주식 장 운영시간(평일 09:00~15:30 KST)이 아닙니다 — 주문이 거부됩니다');
+  }
 
   if (_mtAction === 'BUY') {
     const cash = _mtMarket === 'stock' ? (s.orderable_cash != null ? s.orderable_cash : (s.cash || 0)) : (c.cash || 0);
     const amt  = Math.floor(cash * _mtPct / 100);
+    if (_mtMarket === 'crypto' && amt < UPBIT_MIN_ORDER) {
+      warns.push(`업비트 최소 주문 ${fmt(UPBIT_MIN_ORDER)} 미만 — 비율을 높이세요`);
+    }
     disp.innerHTML = `<span style="color:#58a6ff;font-weight:600">${fmt(amt)}</span> <span class="small gray">(${_mtPct}%)</span>`;
   } else {
     const sel = document.getElementById('mt-holding-select');
@@ -904,7 +922,18 @@ function calcMtAmount() {
       : parseFloat((totalQty * _mtPct / 100).toFixed(8));
     const sellAmt    = Math.round(sellQty * price);
     const qtyStr     = _mtMarket === 'stock' ? sellQty+'주' : sellQty.toFixed(4);
+    if (_mtMarket === 'crypto' && sellAmt < UPBIT_MIN_ORDER) {
+      const totalVal = Math.round(totalQty * price);
+      warns.push(totalVal < UPBIT_MIN_ORDER
+        ? `보유 평가액 ${fmt(totalVal)}이 최소 주문 ${fmt(UPBIT_MIN_ORDER)} 미만 — 이 코인은 매도 불가 (업비트 제한)`
+        : `매도 금액이 최소 주문 ${fmt(UPBIT_MIN_ORDER)} 미만 — 비율을 높이세요`);
+    }
     disp.innerHTML = `<span style="color:#f0883e;font-weight:600">${qtyStr}</span> <span class="small gray">≈ ${fmt(sellAmt)} (${_mtPct}%)</span>`;
+  }
+  if (warns.length) {
+    disp.innerHTML += warns.map(w =>
+      `<div style="margin-top:6px;padding:6px 8px;background:#2d1d0d;border:1px solid #9e6a03;border-radius:6px;color:#e3b341;font-size:12px">⚠ ${w}</div>`
+    ).join('');
   }
 }
 
@@ -958,6 +987,14 @@ async function submitManualTrade() {
   const ticker = document.getElementById('mt-ticker').value.trim();
   const name   = document.getElementById('mt-name').value.trim() || ticker;
   if (!ticker) { alert('종목코드를 입력하세요'); return; }
+
+  // 주식 장 마감 시간엔 서버 왕복 없이 바로 안내
+  if (_mtMarket === 'stock' && !isKstStockMarketOpen()) {
+    const resEl = document.getElementById('mt-result');
+    resEl.style.display = 'block'; resEl.style.background = '#1f0d0d'; resEl.style.color = '#f85149';
+    resEl.textContent = '✗ 주식 장 운영시간이 아닙니다 (평일 09:00~15:30 KST에만 주문 가능)';
+    return;
+  }
 
   // 금액/수량 계산
   let amount_krw = null, qty = null;

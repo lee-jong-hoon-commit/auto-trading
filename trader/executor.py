@@ -49,11 +49,15 @@ def execute_stock(code: str, name: str, action: str, confidence: float, reason: 
             # KIS 주문가능금액 우선 사용 (예수금과 다를 수 있음 — T+2 미결제, 수수료 등)
             _oc = portfolio.get("orderable_cash")
             orderable = _oc if _oc is not None else cash
-            # 포지션 사이징: 종목당 총자산의 MAX_POSITION_PCT 이내로 제한
-            position_cap = max_position_krw if max_position_krw and max_position_krw > 0 \
-                else orderable * config.MAX_POSITION_PCT
-            budget = float(amount_krw) if amount_krw else position_cap
-            budget = min(budget, position_cap)       # AI가 크게 불러도 캡 적용
+            # 포지션 사이징: 봇 경로(max_position_krw 지정)만 총자산 15% 캡 적용.
+            # 수동 매매(웹)는 사용자가 지정한 금액을 그대로 존중한다.
+            is_bot = max_position_krw is not None and max_position_krw > 0
+            if amount_krw:
+                budget = float(amount_krw)
+                if is_bot:
+                    budget = min(budget, max_position_krw)
+            else:
+                budget = max_position_krw if is_bot else orderable * config.MAX_POSITION_PCT
             budget = min(budget, orderable * 0.95)   # 주문가능금액의 95% 상한 (수수료 여유)
             qty = int(budget // current_price)
             if qty < 1:
@@ -136,11 +140,15 @@ def execute_crypto(ticker: str, action: str, confidence: float, reason: str,
             return {"status": "skipped", "reason": f"현재가 조회 실패 ({ticker})"}
 
         if action == "BUY":
-            # 포지션 사이징: 종목당 총자산의 MAX_POSITION_PCT 이내로 제한
-            position_cap = max_position_krw if max_position_krw and max_position_krw > 0 \
-                else cash * config.MAX_POSITION_PCT
-            amount = float(amount_krw) if amount_krw else position_cap
-            amount = min(amount, position_cap)  # AI가 크게 불러도 캡 적용
+            # 포지션 사이징: 봇 경로(max_position_krw 지정)만 총자산 15% 캡 적용.
+            # 수동 매매(웹)는 사용자가 지정한 금액을 그대로 존중한다.
+            is_bot = max_position_krw is not None and max_position_krw > 0
+            if amount_krw:
+                amount = float(amount_krw)
+                if is_bot:
+                    amount = min(amount, max_position_krw)
+            else:
+                amount = max_position_krw if is_bot else cash * config.MAX_POSITION_PCT
             amount = min(amount, cash * 0.95)   # 잔고 상한 (수수료 여유)
             if amount < config.UPBIT_MIN_ORDER_KRW:
                 return {"status": "skipped", "reason": f"매수금액 부족 ({amount:,.0f}원 < 최소 {config.UPBIT_MIN_ORDER_KRW:,}원)"}
