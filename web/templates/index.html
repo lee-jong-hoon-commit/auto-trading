@@ -786,8 +786,7 @@ async function openManualTrade(ticker='', name='', market='stock', action='BUY')
   // 검색창 초기화
   document.getElementById('mt-search').value = '';
   document.getElementById('mt-search-drop').style.display = 'none';
-  setMtAction(action); setMtMarket(market);
-  // 종목 프리필은 setMtMarket 이후에 적용 (setMtMarket의 clearMtSearch가 지우기 때문)
+  // 종목 프리필을 먼저 적용 — setMtMarket에는 keepTicker=true를 넘겨 지워지지 않게 함
   document.getElementById('mt-ticker').value = ticker;
   document.getElementById('mt-name').value   = name;
   if (ticker && name) {
@@ -796,18 +795,20 @@ async function openManualTrade(ticker='', name='', market='stock', action='BUY')
   } else {
     document.getElementById('mt-selected').style.display = 'none';
   }
+  setMtAction(action); setMtMarket(market, true);
   // 비율 버튼 초기화
   [10,25,50,75,100].forEach(p => {
     document.getElementById('mt-pct-'+p).className = 'btn ' + (p===50?'btn-blue':'btn-gray');
   });
   document.getElementById('manual-trade-modal').style.display = 'flex';
-  // 잔고 로드
-  document.getElementById('mt-balance-info').innerHTML = '<div class="small gray">잔고 정보 로딩 중...</div>';
+  // 잔고 로드 — 직전 캐시가 있으면 즉시 렌더 (프리필 종목 바로 선택됨), 이후 최신값으로 갱신
+  if (_mtPortfolio) updateMtBalanceInfo();
+  else document.getElementById('mt-balance-info').innerHTML = '<div class="small gray">잔고 정보 로딩 중...</div>';
   try {
     _mtPortfolio = await api('/api/portfolio');
     updateMtBalanceInfo();
   } catch(e) {
-    document.getElementById('mt-balance-info').innerHTML = '<div class="small" style="color:#f85149">잔고 조회 실패</div>';
+    if (!_mtPortfolio) document.getElementById('mt-balance-info').innerHTML = '<div class="small" style="color:#f85149">잔고 조회 실패</div>';
   }
 }
 
@@ -921,11 +922,11 @@ function setMtAction(a) {
   _showHoldingsDrop();
 }
 
-function setMtMarket(m) {
+function setMtMarket(m, keepTicker=false) {
   _mtMarket = m;
   document.getElementById('mt-stock-btn').className  = 'btn ' + (m==='stock'  ? 'btn-blue' : 'btn-gray');
   document.getElementById('mt-crypto-btn').className = 'btn ' + (m==='crypto' ? 'btn-blue' : 'btn-gray');
-  clearMtSearch();
+  if (!keepTicker) clearMtSearch();  // 모달 오픈 시 프리필 유지, 사용자가 직접 시장 전환할 때만 초기화
   if (_mtPortfolio) updateMtBalanceInfo();
   _showHoldingsDrop();
 }
