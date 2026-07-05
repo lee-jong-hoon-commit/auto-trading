@@ -783,18 +783,19 @@ async function openManualTrade(ticker='', name='', market='stock', action='BUY')
   _mtAction = action; _mtMarket = market; _mtPct = 50;
   document.getElementById('mt-result').style.display = 'none';
   document.getElementById('mt-amount-display').textContent = '';
-  document.getElementById('mt-ticker').value = ticker;
-  document.getElementById('mt-name').value   = name;
   // 검색창 초기화
   document.getElementById('mt-search').value = '';
   document.getElementById('mt-search-drop').style.display = 'none';
+  setMtAction(action); setMtMarket(market);
+  // 종목 프리필은 setMtMarket 이후에 적용 (setMtMarket의 clearMtSearch가 지우기 때문)
+  document.getElementById('mt-ticker').value = ticker;
+  document.getElementById('mt-name').value   = name;
   if (ticker && name) {
     document.getElementById('mt-selected-text').textContent = `${name}  ${ticker}`;
     document.getElementById('mt-selected').style.display = 'flex';
   } else {
     document.getElementById('mt-selected').style.display = 'none';
   }
-  setMtAction(action); setMtMarket(market);
   // 비율 버튼 초기화
   [10,25,50,75,100].forEach(p => {
     document.getElementById('mt-pct-'+p).className = 'btn ' + (p===50?'btn-blue':'btn-gray');
@@ -1071,13 +1072,14 @@ function renderHoldings(stock, crypto, realizedPl) {
   const el = document.getElementById('holdings-list');
   if (!list.length) { el.innerHTML = '<div class="empty">보유 없음</div>'; return; }
   const HC = 'text-align:center;white-space:nowrap';
-  el.innerHTML = `<table style="text-align:center">
+  el.innerHTML = `<div class="small gray" style="margin-bottom:6px">종목을 클릭하면 매수/매도 주문을 낼 수 있습니다</div>
+  <table style="text-align:center">
     <thead><tr><th>구분</th><th>종목</th><th>수량</th><th>투자금액</th><th>평단가</th><th>현재가</th><th>손익률</th><th>손익금액</th></tr></thead>
-    <tbody>${list.map(h => {
+    <tbody>${list.map((h, i) => {
       const plCell = h.pl != null
         ? `<span style="color:${h.pl>=0?'#3fb950':'#f85149'}">${h.pl>=0?'+':''}${fmt(h.pl)}</span>`
         : '<span class="gray">-</span>';
-      return `<tr>
+      return `<tr data-hold-idx="${i}" style="cursor:pointer" title="클릭하여 매매">
         <td style="${HC}"><span class="badge badge-${h.cls}">${h.type}</span></td>
         <td style="text-align:center"><div style="font-weight:600">${h.name}</div><div class="small gray">${h.ticker}</div></td>
         <td style="${HC}">${Number(h.qty).toLocaleString('ko-KR', { maximumFractionDigits: 4 })}</td>
@@ -1089,6 +1091,15 @@ function renderHoldings(stock, crypto, realizedPl) {
       </tr>`;
     }).join('')}</tbody>
   </table>`;
+  // 행 클릭 → 해당 종목이 선택된 상태로 수동매매 모달 (보유 종목이므로 매도 기본)
+  el.querySelectorAll('tr[data-hold-idx]').forEach(tr => {
+    tr.addEventListener('click', () => {
+      const h = list[Number(tr.dataset.holdIdx)];
+      const market = h.type === '주식' ? 'stock' : 'crypto';
+      const name = market === 'crypto' ? h.ticker : h.name;
+      openManualTrade(h.ticker, name, market, 'SELL');
+    });
+  });
 }
 
 // ───────────────────── 거래내역 ─────────────────────
