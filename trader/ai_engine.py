@@ -12,32 +12,33 @@ from config import config
 
 logger = logging.getLogger(__name__)
 
-SYSTEM_PROMPT = """당신은 전문 퀀트 트레이더 AI입니다. 5가지 기술적 전략의 투표 결과와 보유 종목 손익을 종합해 최종 매매 결정을 내리세요.
+SYSTEM_PROMPT = """당신은 전문 퀀트 트레이더 AI입니다. 당신의 역할은 "좋은 진입(BUY) 고르기"입니다.
 
-【보유 종목 — 최우선 판단】
-portfolio_status의 stock_holdings/crypto_holdings에 profit_rate(손익률%)가 있습니다.
-- 손실 크고 지표 약세 → SELL (추가 손실 차단)
-- 손실 크지만 강한 반등 신호 → HOLD (이유 명시)
-- 충분한 수익 + 고점 신호 → SELL (수익 실현)
-※ 이미 보유 중인 종목 BUY 금지 (물타기 방지)
+【역할 분담 — 반드시 숙지】
+청산은 시스템이 기계적 규칙으로 자동 처리합니다 (손절 -3%, +6% 도달 후 트레일링 익절).
+따라서:
+- 단순 손익률만 보고 SELL 결정 금지 — 손절/익절은 시스템 담당
+- SELL은 "추세 구조 붕괴"가 명확할 때만 (예: 상승추세 이탈 + 거래량 실린 하락 + 지지선 붕괴)
+- 애매하면 HOLD — 시스템 규칙이 알아서 지켜줍니다
 
-【기술적 투표 — 참고 기준 (강제 아님)】
-각 종목의 【전략투표】 score(-5~+5)를 참고해 AI가 최종 판단:
-- score ≥ +2 : BUY 적극 고려
-- score 0~+1 : BUY 신중 (confidence 0.75 이상 확신 있을 때만)
-- score ≤ -1 : SELL/HOLD 고려
-- score ≤ -3 : 강한 매도 신호
-투표와 다른 결정을 내릴 때는 reason에 근거를 명확히 쓰세요.
+【BUY 진입 조건 — 엄격히 적용】
+아래 두 조건을 모두 충족할 때만 BUY:
+1. 【전략투표】 score ≥ +2 (5개 전략 중 다수가 매수 신호)
+2. confidence ≥ 0.75 (확신이 없으면 HOLD)
+추가 규칙:
+- score +1 이하는 아무리 좋아 보여도 BUY 금지
+- 이미 보유 중인 종목 BUY 금지 (물타기 방지)
+- 급등 후 고점 추격 금지 — 당일 +10% 이상 상승 종목은 시스템이 차단하지만, +5~10% 급등도 신중히
+- 하루 최대 2~3건만 진입 — 가장 확실한 것만 고르세요. 전부 HOLD여도 좋습니다.
 
 【confidence 기준】
-- BUY: 최소 0.70 이상 (확신 없으면 HOLD)
-- SELL: 최소 0.60 이상
+- BUY: 최소 0.75 (진입 문턱)
+- SELL(구조 붕괴): 최소 0.60
 - 강한 신호 일치: 0.85~0.95
 
 【BUY amount_krw 규칙】
-- 잔고(stock_cash/crypto_cash) 초과 불가
-- 주식: 현재가 이상(1주 단위), 잔고의 30~60%
-- 코인: 최소 5,000원, 잔고의 20~50%
+- 포지션 크기는 시스템이 총자산의 15%로 자동 제한 — amount_krw는 생략하거나 시스템 한도 이내로
+- 코인: 최소 5,000원
 
 【ticker 규칙】
 - 주식: 6자리 숫자 코드 (예: 005930)
@@ -208,16 +209,14 @@ def analyze_and_decide(
     for h in portfolio_status.get("stock_holdings", []):
         rate = h.get("profit_rate", 0)
         pl   = h.get("pl_amount", 0)
-        flag = "⚠ 큰 손실 — SELL 적극 검토" if rate <= -10 else ("✓ 수익 중 — 익절 검토" if rate >= 10 else "")
         holding_lines.append(
-            f"  [{h.get('code','')}] {h.get('name','')} | 손익률 {rate:+.1f}% ({pl:+,.0f}원) {flag}"
+            f"  [{h.get('code','')}] {h.get('name','')} | 손익률 {rate:+.1f}% ({pl:+,.0f}원)"
         )
     for h in portfolio_status.get("crypto_holdings", []):
         rate = h.get("profit_rate", 0)
         pl   = h.get("pl_amount", 0)
-        flag = "⚠ 큰 손실 — SELL 적극 검토" if rate <= -10 else ("✓ 수익 중 — 익절 검토" if rate >= 10 else "")
         holding_lines.append(
-            f"  [{h.get('ticker','')}] 코인 | 손익률 {rate:+.1f}% ({pl:+,.0f}원) {flag}"
+            f"  [{h.get('ticker','')}] 코인 | 손익률 {rate:+.1f}% ({pl:+,.0f}원)"
         )
     holdings_summary = "\n".join(holding_lines) if holding_lines else "  없음"
 
@@ -236,7 +235,8 @@ def analyze_and_decide(
 {chr(10).join(crypto_summaries) if crypto_summaries else '코인 데이터 없음'}
 
 위 데이터를 분석하여 각 종목/코인에 대한 매매 결정을 JSON 형식으로 출력하세요.
-⚠ 큰 손실 종목은 기술적 지표와 무관하게 SELL을 적극 고려하세요.
+손절·익절은 시스템 규칙이 자동 처리하므로, SELL은 추세 구조 붕괴가 명확할 때만 내세요.
+BUY는 score ≥ +2 이고 confidence ≥ 0.75 인 가장 확실한 것만 (없으면 전부 HOLD).
 이미 보유 중인 종목에 BUY 결정은 하지 마세요 (물타기 방지)."""
 
     text = _chat(
@@ -349,20 +349,33 @@ def generate_guide(summary: str, market_type: str, name: str = "") -> dict:
 
 
 def quick_screen(tickers: list[dict], market_type: str = "stock") -> list[dict]:
-    """유망 종목을 1차 스크리닝."""
+    """유망 종목을 1차 스크리닝 — 등락률·거래대금 등 실데이터 기반 선별."""
     if not tickers:
         return []
 
-    ticker_list = "\n".join(
-        f"- {t.get('name', t.get('ticker', ''))} ({t.get('code', t.get('ticker', ''))})"
-        for t in tickers
-    )
+    def _line(t: dict) -> str:
+        name = t.get("name", t.get("ticker", ""))
+        code = t.get("code", t.get("ticker", ""))
+        parts = [f"- {name} ({code})"]
+        if t.get("price"):
+            parts.append(f"현재가 {t['price']:,.0f}")
+        if t.get("change_pct") is not None:
+            parts.append(f"등락 {t['change_pct']:+.2f}%")
+        if t.get("trade_value"):
+            parts.append(f"거래대금 {t['trade_value']/1e8:,.0f}억")
+        return " | ".join(parts)
+
+    ticker_list = "\n".join(_line(t) for t in tickers)
 
     text = _chat(
         [{
             "role": "user",
-            "content": f"""다음 {market_type} 목록에서 현재 시장에서 단기 트레이딩에 가장 유망한 5개를 선택하세요.
-선택 기준: 유동성, 변동성, 섹터 모멘텀
+            "content": f"""다음 {market_type} 목록에서 단기 트레이딩 진입 후보로 유망한 5개를 선택하세요.
+
+선택 기준:
+- 거래대금이 충분해 유동성이 확보된 것
+- 등락률이 과하지 않은 것 (당일 +10% 이상 급등은 추격 위험 — 제외)
+- 하락 중이더라도 반등 가능성이 있는 것보다는 완만한 상승 흐름 우선
 
 목록:
 {ticker_list}

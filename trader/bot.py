@@ -13,7 +13,7 @@ def _is_stock_market_open() -> bool:
         return False
     t = now.hour * 60 + now.minute
     return 9 * 60 <= t < 15 * 60 + 30
-from trader import kis_client, upbit_client, analyzer, ai_engine, executor, watchlist
+from trader import kis_client, upbit_client, analyzer, ai_engine, executor, watchlist, risk
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +91,41 @@ async def run_cycle():
         crypto_holdings = crypto_portfolio.get("holdings", [])
         _log(f"잔고 — 주식 주문가능: {stock_cash:,.0f}원 (보유 {len(stock_holdings)}종목), 코인: {crypto_cash:,.0f}원 (보유 {len(crypto_holdings)}종류)")
 
+        # 1.5 규칙 기반 청산 (AI 판단과 무관하게 기계적 실행)
+        #     손절 -3% / +6% 도달 후 트레일링 -2% / 백스톱 -20%
+        rule_exits = risk.evaluate_holdings(stock_holdings, crypto_holdings)
+        stock_market_open_now = _is_stock_market_open()
+        for ex in rule_exits:
+            key, name, market, reason = ex["key"], ex["name"], ex["market"], ex["reason"]
+            if market == "stock" and not stock_market_open_now:
+                _log(f"⏸ 규칙 매도 대기 (장 마감): {name}({key}) — {reason}", "warning")
+                continue
+            _log(f"🔻 규칙 매도: {name}({key}) — {reason}")
+            if market == "stock":
+                res = await asyncio.to_thread(
+                    executor.execute_stock, key, name, "SELL", 1.0, reason, stock_portfolio
+                )
+            else:
+                res = await asyncio.to_thread(
+                    executor.execute_crypto, key, "SELL", 1.0, reason, crypto_portfolio
+                )
+            if res.get("status") == "executed":
+                _log(f"✓ 규칙 매도 체결: {name} {res.get('amount', res.get('amount_krw', 0)):,.0f}원")
+                # 이후 단계(후보 선정·AI)에 팔린 종목이 보유분으로 잡히지 않게 제거
+                if market == "stock":
+                    stock_holdings[:] = [h for h in stock_holdings if h["code"] != key]
+                else:
+                    crypto_holdings[:] = [h for h in crypto_holdings if h["ticker"] != key]
+            else:
+                _log(f"✗ 규칙 매도 실패: {name} — {res.get('error') or res.get('reason','')}", "error")
+
+        # 총자산 (포지션 사이징·일일 손실 한도 기준)
+        total_assets = (stock_portfolio.get("total") or 0) + (crypto_portfolio.get("total") or 0)
+        max_position_krw = total_assets * config.MAX_POSITION_PCT if total_assets > 0 else 0
+        daily_stop, daily_pl = risk.daily_realized_loss_exceeded(total_assets)
+        if daily_stop:
+            _log(f"🛑 일일 손실 한도 초과 (당일 실현손익 {daily_pl:+,.0f}원) — 오늘 신규 매수 중단", "warning")
+
         # 2. 분석 대상 종목 선정
         stock_candidates = []
         crypto_candidates = []
@@ -112,10 +147,12 @@ async def run_cycle():
                     if s["code"] not in held_codes
                     and len(s["code"]) == 6 and s["code"].isdigit()
                     and not s.get("name", "").startswith(_ETF_PREFIXES)
+                    and not risk.is_in_cooldown(s["code"])
                 ]
             else:
                 source = "관심종목(폴백)"
-                universe = [s for s in watchlist.get_stocks() if s["code"] not in held_codes]
+                universe = [s for s in watchlist.get_stocks()
+                            if s["code"] not in held_codes and not risk.is_in_cooldown(s["code"])]
 
             # 주식도 AI 1차 스크리닝 (코인과 동일하게 유망 종목만 선별)
             if len(universe) > config.STOCK_ANALYSIS_LIMIT:
@@ -132,7 +169,9 @@ async def run_cycle():
             held_tickers = {h["ticker"] for h in crypto_holdings}
             top_tickers = await asyncio.to_thread(upbit_client.get_top_tickers, 30)
             all_tickers = list(dict.fromkeys(watchlist.get_tickers() + top_tickers))
-            ticker_dicts = [{"ticker": t, "name": t} for t in all_tickers if t not in held_tickers]
+            snapshot = await asyncio.to_thread(upbit_client.get_market_snapshot, all_tickers)
+            ticker_dicts = [{"ticker": t, "name": t, **snapshot.get(t, {})} for t in all_tickers
+                            if t not in held_tickers and not risk.is_in_cooldown(t)]
             _log(f"코인 {len(ticker_dicts)}개 AI 1차 스크리닝 중...")
             screened = await asyncio.to_thread(ai_engine.quick_screen, ticker_dicts, "crypto")
             crypto_candidates = [{"ticker": h["ticker"]} for h in crypto_holdings] + screened
@@ -149,13 +188,16 @@ async def run_cycle():
             indicators = analyzer.compute_indicators(df)
             text = analyzer.summarize_for_ai(name, indicators, "stock")
             price = indicators.get("current_price", 0) if indicators else 0
-            return text, price
+            change = indicators.get("change_pct", 0) if indicators else 0
+            return text, price, change
 
         def _crypto_summary_sync(c):
             ticker = c.get("ticker", "")
             df = upbit_client.get_ohlcv(ticker)
             indicators = analyzer.compute_indicators(df)
-            return analyzer.summarize_for_ai(ticker, indicators, "crypto")
+            text = analyzer.summarize_for_ai(ticker, indicators, "crypto")
+            change = indicators.get("change_pct", 0) if indicators else 0
+            return text, change
 
         _kis_sem = asyncio.Semaphore(3)  # KIS API 동시 호출 3개로 제한
 
@@ -164,63 +206,52 @@ async def run_cycle():
             is_holding = code in held_codes
             async with _kis_sem:
                 try:
-                    text, price = await asyncio.to_thread(_stock_summary_sync, s)
-                    return text, price, is_holding
+                    text, price, change = await asyncio.to_thread(_stock_summary_sync, s)
+                    return text, price, change, is_holding
                 except Exception as e:
                     _log(f"주식 지표 계산 실패 {code}: {e}", "warning")
-                    return None, 0, is_holding
+                    return None, 0, 0, is_holding
 
         async def _crypto_summary(c):
             ticker = c.get("ticker", "")
+            is_holding = ticker in {h["ticker"] for h in crypto_holdings}
             try:
-                return await asyncio.to_thread(_crypto_summary_sync, c)
+                text, change = await asyncio.to_thread(_crypto_summary_sync, c)
+                return text, change, is_holding
             except Exception as e:
                 _log(f"코인 지표 계산 실패 {ticker}: {e}", "warning")
-                return None
+                return None, 0, is_holding
 
         stock_results, crypto_results = await asyncio.gather(
             asyncio.gather(*[_stock_summary(s) for s in stock_candidates]),
             asyncio.gather(*[_crypto_summary(c) for c in crypto_candidates]),
         )
         # 주식은 1주 단위 매수 → 현재가 > 잔고면 살 수 없으므로 AI에 넘기기 전 필터링
-        # 보유 종목(is_holding=True)은 SELL 판단을 위해 가격 무관 항상 포함
-        raw_stock = [(text, price, is_holding) for text, price, is_holding in stock_results if text]
-        unaffordable = [text.split("\n")[0] for text, price, is_holding in raw_stock
-                        if price > stock_cash > 0 and not is_holding]
+        # 보유 종목(is_holding=True)은 SELL 판단을 위해 가격·등락률 무관 항상 포함
+        raw_stock = [(text, price, change, ih) for text, price, change, ih in stock_results if text]
+        unaffordable = [text.split("\n")[0] for text, price, change, ih in raw_stock
+                        if price > stock_cash > 0 and not ih]
         if unaffordable:
             _log(f"예산 초과 주식 제외 ({stock_cash:,.0f}원): {', '.join(unaffordable)}")
-        stock_summaries = [text for text, price, is_holding in raw_stock
-                           if is_holding or price <= stock_cash or stock_cash <= 0]
-        crypto_summaries = [r for r in crypto_results if r]
+        # 추격매수 방지: 당일 등락률이 한도 이상인 신규 종목은 제외
+        chased = [text.split("\n")[0] for text, price, change, ih in raw_stock
+                  if not ih and change >= config.CHASE_LIMIT_PCT]
+        if chased:
+            _log(f"급등 추격 방지 제외 (+{config.CHASE_LIMIT_PCT:.0f}%↑): {', '.join(chased)}")
+        stock_summaries = [text for text, price, change, ih in raw_stock
+                           if ih or ((price <= stock_cash or stock_cash <= 0)
+                                     and change < config.CHASE_LIMIT_PCT)]
+
+        raw_crypto = [(text, change, ih) for text, change, ih in crypto_results if text]
+        chased_c = [text.split("\n")[0] for text, change, ih in raw_crypto
+                    if not ih and change >= config.CHASE_LIMIT_PCT]
+        if chased_c:
+            _log(f"급등 코인 추격 방지 제외 (+{config.CHASE_LIMIT_PCT:.0f}%↑): {', '.join(chased_c)}")
+        crypto_summaries = [text for text, change, ih in raw_crypto
+                            if ih or change < config.CHASE_LIMIT_PCT]
         _log(f"지표 계산 완료 — 주식 {len(stock_summaries)}개, 코인 {len(crypto_summaries)}개")
 
-        # 4. 극단적 손실 안전망 (-20% 초과 시 AI 무관하게 강제 손절)
-        EMERGENCY_CUT = -20.0
-        for h in list(stock_holdings):
-            rate = h.get("profit_rate", 0)
-            if rate <= EMERGENCY_CUT:
-                _log(f"🚨 긴급 손절: {h['name']}({h['code']}) {rate:.1f}% — 강제 SELL")
-                res = await asyncio.to_thread(
-                    executor.execute_stock, h["code"], h["name"], "SELL", 1.0,
-                    f"긴급 손절 ({rate:.1f}%, 한계선 {EMERGENCY_CUT:.0f}%)", stock_portfolio
-                )
-                if res.get("status") == "executed":
-                    _log(f"✓ 긴급 손절 체결: {h['name']} {res.get('amount',0):,.0f}원")
-                else:
-                    _log(f"✗ 긴급 손절 실패: {h['name']} — {res.get('error') or res.get('reason','')}", "error")
-
-        for h in list(crypto_holdings):
-            rate = h.get("profit_rate", 0)
-            if rate <= EMERGENCY_CUT:
-                _log(f"🚨 긴급 손절: {h['ticker']} {rate:.1f}% — 강제 SELL")
-                res = await asyncio.to_thread(
-                    executor.execute_crypto, h["ticker"], "SELL", 1.0,
-                    f"긴급 손절 ({rate:.1f}%)", crypto_portfolio
-                )
-                if res.get("status") == "executed":
-                    _log(f"✓ 긴급 손절 체결: {h['ticker']} {res.get('amount_krw',0):,.0f}원")
-
-        # 6. AI 의사결정 (AI가 손익률 보고 손절/익절 직접 판단)
+        # 4. AI 의사결정 (진입 선택 담당 — 청산은 1.5단계 규칙 레이어가 전담)
         _model = {"gemini": config.GEMINI_MODEL, "anthropic": config.ANTHROPIC_MODEL, "ollama": config.OLLAMA_MODEL}.get(config.AI_PROVIDER, config.AI_PROVIDER)
         _log(f"AI 분석 요청 중 ({config.AI_PROVIDER} / {_model})...")
         portfolio_status = {
@@ -284,8 +315,13 @@ async def run_cycle():
                 _log(f"→ 스킵: {name} BUY — 주문가능금액 부족 ({stock_cash:,.0f}원)")
                 continue
 
-            # 이미 보유 중인 종목 추가 매수 금지 (물타기 방지)
             if action == "BUY":
+                # 일일 손실 한도 초과 시 당일 신규 매수 중단
+                if daily_stop:
+                    _log(f"→ 스킵: {name} BUY — 일일 손실 한도 초과 (당일 {daily_pl:+,.0f}원)")
+                    continue
+
+                # 이미 보유 중인 종목 추가 매수 금지 (물타기 방지)
                 already_held = (
                     ticker in {h["code"] for h in stock_holdings} if not is_crypto
                     else ticker in {h["ticker"] for h in crypto_holdings}
@@ -294,14 +330,33 @@ async def run_cycle():
                     _log(f"→ 스킵: {name} BUY — 이미 보유 중 (물타기 방지)")
                     continue
 
+                # 매도 후 재매수 쿨다운
+                if risk.is_in_cooldown(ticker):
+                    _log(f"→ 스킵: {name} BUY — 재매수 쿨다운 중 ({config.REBUY_COOLDOWN_HOURS}h)")
+                    continue
+
+                # 최대 동시 보유 종목 수 제한
+                position_count = (len(stock_holdings) + len(crypto_holdings)
+                                  + sum(1 for e in executed if e.get("action") == "BUY"))
+                if position_count >= config.MAX_POSITIONS:
+                    _log(f"→ 스킵: {name} BUY — 최대 보유 종목 수 도달 ({position_count}/{config.MAX_POSITIONS})")
+                    continue
+
+            # AI SELL은 최소 보유시간 이후에만 허용 (손절·트레일링은 규칙 레이어가 별도 처리)
+            if action == "SELL" and risk.held_too_short(ticker):
+                _log(f"→ 스킵: {name} SELL — 최소 보유시간 미달 ({config.MIN_HOLD_MINUTES}분), 규칙 레이어가 손절 담당")
+                continue
+
             _log(f"주문 실행: {action} {name}({ticker}) confidence={confidence:.2f}")
             if ticker.startswith("KRW-"):
                 result = await asyncio.to_thread(
-                    executor.execute_crypto, ticker, action, confidence, reason, crypto_portfolio, amount_krw
+                    executor.execute_crypto, ticker, action, confidence, reason, crypto_portfolio,
+                    amount_krw, None, max_position_krw
                 )
             else:
                 result = await asyncio.to_thread(
-                    executor.execute_stock, ticker, name, action, confidence, reason, stock_portfolio, amount_krw
+                    executor.execute_stock, ticker, name, action, confidence, reason, stock_portfolio,
+                    amount_krw, None, max_position_krw
                 )
 
             status = result.get("status")
