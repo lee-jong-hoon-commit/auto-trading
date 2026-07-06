@@ -244,6 +244,12 @@ def _get_orderable_cash(acct: str, suffix: str) -> int:
         )
         resp.raise_for_status()
         out = resp.json().get("output", {})
+        # nrcvb_buy_amt = 미수 없는 최대 매수가능금액 (현금 + 매도대금 재사용분).
+        # HTS/MTS 앱의 '주문가능금액'과 동일한 값. ord_psbl_cash는 매도대금
+        # 재사용분(ruse_psbl_amt)이 빠져 있어 T+2 정산 전에는 과소평가된다.
+        nrcvb = int(out.get("nrcvb_buy_amt") or 0)
+        if nrcvb > 0:
+            return nrcvb
         return int(out.get("ord_psbl_cash", 0))
     except Exception as e:
         logger.warning(f"주문가능현금 조회 실패 (inquire-psbl-order): {e}")
