@@ -783,6 +783,8 @@ async function openManualTrade(ticker='', name='', market='stock', action='BUY')
   _mtAction = action; _mtMarket = market; _mtPct = 50;
   document.getElementById('mt-result').style.display = 'none';
   document.getElementById('mt-amount-display').textContent = '';
+  // 직전 주문 성공 시 잠가둔 실행 버튼 재활성화 (안 풀면 영구 비활성)
+  document.getElementById('mt-submit-btn').disabled = false;
   // 검색창 초기화
   document.getElementById('mt-search').value = '';
   document.getElementById('mt-search-drop').style.display = 'none';
