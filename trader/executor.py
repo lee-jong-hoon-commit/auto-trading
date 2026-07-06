@@ -165,9 +165,13 @@ def execute_crypto(ticker: str, action: str, confidence: float, reason: str,
                     amount = min(amount, max_position_krw)
             else:
                 amount = max_position_krw if is_bot else cash * config.MAX_POSITION_PCT
+            # 최소 투자금액 보정: 5,000원에 딱 맞춰 사면 소폭 하락 시 매도 불가(먼지 잔고)
+            # → 최소 CRYPTO_MIN_BUY_KRW 이상으로 올려서 매수
+            amount = max(amount, config.CRYPTO_MIN_BUY_KRW)
             amount = min(amount, cash * 0.95)   # 잔고 상한 (수수료 여유)
-            if amount < config.UPBIT_MIN_ORDER_KRW:
-                return {"status": "skipped", "reason": f"매수금액 부족 ({amount:,.0f}원 < 최소 {config.UPBIT_MIN_ORDER_KRW:,}원)"}
+            if amount < config.CRYPTO_MIN_BUY_KRW:
+                return {"status": "skipped",
+                        "reason": f"매수금액 부족 ({amount:,.0f}원 < 최소 투자 {config.CRYPTO_MIN_BUY_KRW:,}원 — 하락 시 매도 불가 방지)"}
             result = upbit_client.place_order(ticker, "buy", amount_krw=amount)
             err = _upbit_error(result)
             if err:

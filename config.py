@@ -52,6 +52,9 @@ class Config:
     CRYPTO_ANALYSIS_LIMIT: int = 8   # 1회 사이클에 기술적 지표 계산할 최대 코인 수
     # 업비트 최소 주문 금액(원). 이 금액 미만은 매수/매도 불가 → 먼지 잔고로 간주
     UPBIT_MIN_ORDER_KRW: int = int(os.getenv("UPBIT_MIN_ORDER_KRW", "5000"))
+    # 코인 매수 최소 투자금액(원). 최소주문(5,000원)에 딱 맞춰 사면 조금만 하락해도
+    # 매도 불가능한 먼지 잔고가 되므로 버퍼를 둔다 (7,000원이면 -28%까지 매도 가능)
+    CRYPTO_MIN_BUY_KRW: int = int(os.getenv("CRYPTO_MIN_BUY_KRW", "7000"))
     # 사용자 지정 분석 종목(쉼표 구분 종목코드, 예: "005930,000660").
     # 설정 시 기본 종목 목록 대신 우선 사용.
     CUSTOM_STOCKS: str = os.getenv("CUSTOM_STOCKS", "")

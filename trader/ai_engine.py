@@ -38,7 +38,7 @@ SYSTEM_PROMPT = """당신은 전문 퀀트 트레이더 AI입니다. 당신의 �
 
 【BUY amount_krw 규칙】
 - 포지션 크기는 시스템이 총자산의 15%로 자동 제한 — amount_krw는 생략하거나 시스템 한도 이내로
-- 코인: 최소 5,000원
+- 코인: 최소 __CRYPTO_MIN_BUY__원 (거래소 최소주문 5,000원에 딱 맞춰 사면 하락 시 매도 불가 — 여유 있게)
 
 【ticker 규칙】
 - 주식: 6자리 숫자 코드 (예: 005930)
@@ -59,6 +59,9 @@ SYSTEM_PROMPT = """당신은 전문 퀀트 트레이더 AI입니다. 당신의 �
   ],
   "market_summary": "전반적인 시장 상황 요약 (한국어, 2~3문장)"
 }"""
+
+# 설정값 주입 (env CRYPTO_MIN_BUY_KRW 변경 시 프롬프트도 자동 반영)
+SYSTEM_PROMPT = SYSTEM_PROMPT.replace("__CRYPTO_MIN_BUY__", f"{config.CRYPTO_MIN_BUY_KRW:,}")
 
 
 # Anthropic 클라이언트는 provider=anthropic 일 때만 초기화 (없어도 import 에러 안 남)
