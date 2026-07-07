@@ -34,6 +34,9 @@ class Config:
 
     # Trading
     TRADE_INTERVAL_MINUTES: int = int(os.getenv("TRADE_INTERVAL_MINUTES", "30"))
+    # AI 분석 주기(분) — 사이클마다 잔고 체크·규칙 청산은 돌지만, AI(LLM) 호출은
+    # 이 간격 이상 지났을 때만 실행 (일봉 지표라 자주 분석해도 정보 이득 없음 + API 비용 절감)
+    AI_ANALYSIS_INTERVAL_MINUTES: int = int(os.getenv("AI_ANALYSIS_INTERVAL_MINUTES", "60"))
 
     # ── 리스크 관리 (규칙 기반 청산 — AI 판단과 무관하게 기계적으로 실행) ──
     STOP_LOSS_PCT: float = float(os.getenv("STOP_LOSS_PCT", "-3.0"))              # 손절선 (손익률 %)

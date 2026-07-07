@@ -50,8 +50,16 @@ def _log(msg: str, level: str = "info"):
         _state["activity_log"] = _state["activity_log"][-200:]
 
 
-async def run_cycle():
-    """1회 분석 + 매매 사이클 — 모든 블로킹 I/O는 스레드에서 실행."""
+# 마지막 AI 분석 시각 — 사이클마다 규칙 청산은 돌고, AI 호출은 이 간격으로 스로틀링
+_last_ai_run: datetime | None = None
+
+
+async def run_cycle(force_ai: bool = False):
+    """1회 분석 + 매매 사이클 — 모든 블로킹 I/O는 스레드에서 실행.
+
+    force_ai=True(대시보드 수동 실행)면 AI 분석 주기와 무관하게 항상 분석한다.
+    """
+    global _last_ai_run
     _state["errors"] = []
     _log("=== 자동매매 사이클 시작 ===")
 
@@ -126,6 +134,17 @@ async def run_cycle():
         if daily_stop:
             _log(f"🛑 일일 손실 한도 초과 (당일 실현손익 {daily_pl:+,.0f}원) — 오늘 신규 매수 중단", "warning")
 
+        # 1.6 AI 분석 주기 체크 — 규칙 청산은 매 사이클, AI 호출은 간격 제한 (API 비용 절감)
+        now = datetime.now(KST)
+        ai_due = (_last_ai_run is None
+                  or (now - _last_ai_run).total_seconds() >= config.AI_ANALYSIS_INTERVAL_MINUTES * 60)
+        if not ai_due and not force_ai:
+            remain = config.AI_ANALYSIS_INTERVAL_MINUTES - (now - _last_ai_run).total_seconds() / 60
+            _state["last_run"] = now.isoformat()
+            _log(f"=== 사이클 완료 (규칙 청산만 수행 — 다음 AI 분석까지 {remain:.0f}분) ===")
+            return
+        _last_ai_run = now
+
         # 2. 분석 대상 종목 선정
         stock_candidates = []
         crypto_candidates = []
@@ -135,7 +154,11 @@ async def run_cycle():
             now_kst = datetime.now(KST)
             _log(f"주식 시장 시간 외 ({now_kst.strftime('%H:%M')} KST) — 주식 분석·거래 건너뜀 (09:00~15:30만 운영)")
 
-        if config.is_kis_ready and stock_market_open:
+        if config.is_kis_ready and stock_market_open and stock_cash <= 0:
+            held_codes = {h["code"] for h in stock_holdings}
+            stock_candidates = list(stock_holdings)
+            _log("주식 주문가능금액 0원 — 신규 스크리닝 생략 (보유 종목만 분석)")
+        elif config.is_kis_ready and stock_market_open:
             held_codes = {h["code"] for h in stock_holdings}
             _log(f"거래대금 상위 저가주 스캔 중 (예산 {stock_cash:,.0f}원 이하)...")
             dynamic = await asyncio.to_thread(kis_client.get_dynamic_stocks, stock_cash, 40)
@@ -165,7 +188,10 @@ async def run_cycle():
             stock_candidates = list(stock_holdings) + new_candidates
             _log(f"[{source}] 주식 분석 대상 확정: {len(stock_candidates)}개 (보유 {len(stock_holdings)} + 신규 {len(new_candidates)})")
 
-        if config.is_upbit_ready:
+        if config.is_upbit_ready and crypto_cash < config.CRYPTO_MIN_BUY_KRW:
+            crypto_candidates = [{"ticker": h["ticker"]} for h in crypto_holdings][:config.CRYPTO_ANALYSIS_LIMIT]
+            _log(f"코인 현금 {crypto_cash:,.0f}원 < 최소 투자 {config.CRYPTO_MIN_BUY_KRW:,}원 — 신규 스크리닝 생략 (보유 코인만 분석)")
+        elif config.is_upbit_ready:
             held_tickers = {h["ticker"] for h in crypto_holdings}
             top_tickers = await asyncio.to_thread(upbit_client.get_top_tickers, 30)
             all_tickers = list(dict.fromkeys(watchlist.get_tickers() + top_tickers))
@@ -250,6 +276,12 @@ async def run_cycle():
         crypto_summaries = [text for text, change, ih in raw_crypto
                             if ih or change < config.CHASE_LIMIT_PCT]
         _log(f"지표 계산 완료 — 주식 {len(stock_summaries)}개, 코인 {len(crypto_summaries)}개")
+
+        # 분석 대상이 없으면 AI 호출 생략 (빈 데이터로 API 비용 낭비 방지)
+        if not stock_summaries and not crypto_summaries:
+            _state["last_run"] = datetime.now(KST).isoformat()
+            _log("=== 사이클 완료 (분석 대상 없음 — AI 호출 생략) ===")
+            return
 
         # 4. AI 의사결정 (진입 선택 담당 — 청산은 1.5단계 규칙 레이어가 전담)
         _model = {"gemini": config.GEMINI_MODEL, "anthropic": config.ANTHROPIC_MODEL, "ollama": config.OLLAMA_MODEL}.get(config.AI_PROVIDER, config.AI_PROVIDER)
@@ -414,5 +446,5 @@ async def stop_bot():
 
 
 async def run_once():
-    """수동 1회 실행"""
-    await run_cycle()
+    """수동 1회 실행 — 대시보드 요청이므로 AI 분석 주기와 무관하게 항상 분석"""
+    await run_cycle(force_ai=True)
