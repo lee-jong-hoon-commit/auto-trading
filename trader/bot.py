@@ -17,6 +17,32 @@ from trader import kis_client, upbit_client, analyzer, ai_engine, executor, watc
 
 logger = logging.getLogger(__name__)
 
+# BTC·ETH는 대형 코인으로 별도 취급, 나머지는 알트로 분류 (상관 노출 제한용)
+_MAJOR_COINS = ("KRW-BTC", "KRW-ETH")
+
+
+def _btc_regime() -> tuple[bool, str]:
+    """BTC 단기 레짐 판정 — 알트코인은 BTC를 따라가므로 BTC가 약하면 코인 신규 진입 금지.
+
+    나쁨 조건: 24h 등락 ≤ BTC_REGIME_DROP_PCT(-1%) 또는 종가가 MA5 아래.
+    데이터 조회 실패 시 진입을 막지 않는다 (보수적 차단보다 오탐 방지 우선).
+    """
+    try:
+        df = upbit_client.get_ohlcv("KRW-BTC", count=10)
+        if df.empty or len(df) < 6:
+            return True, "BTC 데이터 부족 — 필터 통과"
+        closes = df["close"]
+        cur, prev = float(closes.iloc[-1]), float(closes.iloc[-2])
+        chg = (cur - prev) / prev * 100
+        ma5 = float(closes.rolling(5).mean().iloc[-1])
+        if chg <= config.BTC_REGIME_DROP_PCT:
+            return False, f"BTC 24h {chg:+.1f}% ≤ {config.BTC_REGIME_DROP_PCT:.0f}%"
+        if cur < ma5:
+            return False, f"BTC MA5 아래 ({cur:,.0f} < {ma5:,.0f})"
+        return True, f"BTC 24h {chg:+.1f}%, MA5 위"
+    except Exception as e:
+        return True, f"BTC 레짐 조회 실패({e}) — 필터 통과"
+
 _state = {
     "running": False,
     "last_run": None,
@@ -188,9 +214,16 @@ async def run_cycle(force_ai: bool = False):
             stock_candidates = list(stock_holdings) + new_candidates
             _log(f"[{source}] 주식 분석 대상 확정: {len(stock_candidates)}개 (보유 {len(stock_holdings)} + 신규 {len(new_candidates)})")
 
-        if config.is_upbit_ready and crypto_cash < config.CRYPTO_MIN_BUY_KRW:
+        # BTC 레짐 판정 (코인 신규 진입 게이트)
+        regime_ok, regime_msg = True, ""
+        if config.is_upbit_ready:
+            regime_ok, regime_msg = await asyncio.to_thread(_btc_regime)
+
+        if config.is_upbit_ready and (crypto_cash < config.CRYPTO_MIN_BUY_KRW or not regime_ok):
             crypto_candidates = [{"ticker": h["ticker"]} for h in crypto_holdings][:config.CRYPTO_ANALYSIS_LIMIT]
-            _log(f"코인 현금 {crypto_cash:,.0f}원 < 최소 투자 {config.CRYPTO_MIN_BUY_KRW:,}원 — 신규 스크리닝 생략 (보유 코인만 분석)")
+            why = (f"BTC 레짐 필터 발동 ({regime_msg})" if not regime_ok
+                   else f"코인 현금 {crypto_cash:,.0f}원 < 최소 투자 {config.CRYPTO_MIN_BUY_KRW:,}원")
+            _log(f"🚫 {why} — 코인 신규 스크리닝 생략 (보유 코인만 분석)")
         elif config.is_upbit_ready:
             held_tickers = {h["ticker"] for h in crypto_holdings}
             top_tickers = await asyncio.to_thread(upbit_client.get_top_tickers, 30)
@@ -373,6 +406,32 @@ async def run_cycle(force_ai: bool = False):
                 if position_count >= config.MAX_POSITIONS:
                     _log(f"→ 스킵: {name} BUY — 최대 보유 종목 수 도달 ({position_count}/{config.MAX_POSITIONS})")
                     continue
+
+                # 하루 신규 진입 상한 (진입 남발 방지)
+                buys_today = risk.daily_buy_count() + sum(1 for e in executed if e.get("action") == "BUY")
+                if buys_today >= config.MAX_DAILY_ENTRIES:
+                    _log(f"→ 스킵: {name} BUY — 하루 신규 진입 상한 도달 ({buys_today}/{config.MAX_DAILY_ENTRIES}건)")
+                    continue
+
+                # BTC 레짐 필터 (스크리닝 단계에서 걸렀지만 이중 방어)
+                if is_crypto and not regime_ok:
+                    _log(f"→ 스킵: {name} BUY — BTC 레짐 필터 ({regime_msg})")
+                    continue
+
+                # 알트코인 동시 보유 상한 — 알트는 BTC와 동반 등락하므로 상관 노출 제한
+                # (매도 불가능한 5,000원 미만 먼지 잔고는 카운트 제외)
+                if is_crypto and ticker not in _MAJOR_COINS:
+                    alt_count = sum(
+                        1 for h in crypto_holdings
+                        if h["ticker"] not in _MAJOR_COINS
+                        and h.get("eval_amount", 0) >= config.UPBIT_MIN_ORDER_KRW
+                    ) + sum(1 for e in executed
+                            if e.get("action") == "BUY"
+                            and str(e.get("ticker", "")).startswith("KRW-")
+                            and e.get("ticker") not in _MAJOR_COINS)
+                    if alt_count >= config.MAX_ALT_POSITIONS:
+                        _log(f"→ 스킵: {name} BUY — 알트코인 동시 보유 상한 ({alt_count}/{config.MAX_ALT_POSITIONS}개)")
+                        continue
 
             # AI SELL은 최소 보유시간 이후에만 허용 (손절·트레일링은 규칙 레이어가 별도 처리)
             if action == "SELL" and risk.held_too_short(ticker):

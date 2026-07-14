@@ -166,6 +166,18 @@ def evaluate_holdings(stock_holdings: list[dict], crypto_holdings: list[dict]) -
     return exits
 
 
+def daily_buy_count() -> int:
+    """오늘(KST) 실행된 매수 건수 — 하루 신규 진입 상한 체크용."""
+    try:
+        from trader import executor
+        trades = executor._load_trades()
+    except Exception:
+        return 0
+    today = datetime.now(KST).date().isoformat()
+    return sum(1 for t in trades
+               if t.get("action") == "BUY" and str(t.get("time", "")).startswith(today))
+
+
 def daily_realized_loss_exceeded(total_assets: float) -> tuple[bool, float]:
     """당일(KST) 실현손실이 총자산의 DAILY_LOSS_LIMIT_PCT%를 초과했는지.
 

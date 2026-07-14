@@ -49,6 +49,9 @@ class Config:
     MIN_HOLD_MINUTES: int = int(os.getenv("MIN_HOLD_MINUTES", "60"))              # AI SELL 최소 보유시간 (손절선은 예외)
     DAILY_LOSS_LIMIT_PCT: float = float(os.getenv("DAILY_LOSS_LIMIT_PCT", "3.0")) # 일일 실현손실 한도 (총자산 %) — 초과 시 당일 신규매수 중단
     CHASE_LIMIT_PCT: float = float(os.getenv("CHASE_LIMIT_PCT", "10.0"))          # 당일 등락률 이 이상이면 신규매수 금지 (추격매수 방지)
+    MAX_DAILY_ENTRIES: int = int(os.getenv("MAX_DAILY_ENTRIES", "3"))             # 하루 신규 진입(매수) 상한 — 진입 남발 방지
+    MAX_ALT_POSITIONS: int = int(os.getenv("MAX_ALT_POSITIONS", "3"))             # 알트코인(BTC·ETH 제외) 동시 보유 상한 — 상관 노출 제한
+    BTC_REGIME_DROP_PCT: float = float(os.getenv("BTC_REGIME_DROP_PCT", "-1.0"))  # BTC 24h 등락이 이 이하면 코인 신규 진입 금지 (레짐 필터)
 
     # AI는 진입 선택만 담당 — 아래는 분석 후보 상한선(성능용)
     STOCK_ANALYSIS_LIMIT: int = 10   # 1회 사이클에 기술적 지표 계산할 최대 주식 수
